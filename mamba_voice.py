@@ -35,13 +35,16 @@ except ImportError:
 
 
 # ==============================================================================
-# 3. SREDIŠNJA KONFIGURACIJA SUSTAVA (MambaBookVoice) v1.0.6
+# 3. MINIMALNA KONFIGURACIJA - samo DIR putanje i konstante
+# ==============================================================================
+# NAPOMENA: Sva ostala konfiguracija ide u config/settings.py
+# Ova CONFIG će biti spojena sa vrijednostima iz settings.py pri pokretanju.
 # ==============================================================================
 CONFIG: dict[str, Any] = {
     "VERSION": "1.0.6",
     "PROJECT_NAME": "MambaBookVoice",
 
-    # Putanje direktorija
+    # ===== SAMO DIR PUTANJE (dinamičke, trebaju biti ovdje) =====
     "DIR": {
         "BASE": os.path.dirname(os.path.abspath(__file__)),
         "LOGS": os.path.join(os.path.dirname(os.path.abspath(__file__)), "doc", "logs"),
@@ -55,66 +58,140 @@ CONFIG: dict[str, Any] = {
         "OUTPUT_MP3": os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "mp3")
     },
 
-    # Postavke LM Studio API-ja za prijevod (lokalni LLM)
-    "TRANSLATION": {
-        "API_URL": "http://localhost:1234/v1/chat/completions",
-        "API_MODEL": "",
-        "TEMPERATURE": 0.3,
-        "MAX_TOKENS": 2048,
-        "MIN_WORDS_FOR_LLM": 4,
-        "SYSTEM_PROMPT": (
-            "Instruction: Translate the following English text from Isaac Asimov's science "
-            "fiction book into natural, literary Croatian.\n"
-            "Rules:\n"
-            "1. Output ONLY the raw translation.\n"
-            "2. Do NOT include introductory phrases, explanations, or notes like "
-            "'Here is the translation:'.\n"
-            "3. The narrator/author is male (Isaac Asimov) - ensure all first-person "
-            "past-tense verbs use the male form (e.g., 'otvorio sam', 'pročitao sam', "
-            "'razmišljao sam' instead of 'otvorila sam').\n"
-            "4. Preserve the exact paragraph meaning without adding fabricated sentences."
-        ),
-        "SCAN_PAGES_LIMIT": 30,
-        "HEADER_FOOTER_THRESHOLD": 0.40
-    },
-
-    # Audio postavke (TTS)
-    "TTS": {
-        "NARATOR": {
-            "VOICE": "hr-HR-SreckoNeural",
-            "RATE": "+0%",
-            "PITCH": "+0Hz"
-        },
-        "DIJALOG": {
-            "USE_DIFFERENT_VOICE": True,
-            "VOICE": "hr-HR-GabrijelaNeural",
-            "RATE": "+2%",
-            "PITCH": "+0Hz"
-        },
-        "DRAMATIC_MODE": {
-            "ENABLED": True,
-            "KEYWORDS_ANXIOUS": [
-                "run", "explosion", "danger", "dead", "weapon",
-                "fast", "shot", "kill", "attack", "terror"
-            ],
-            "RATE_MODIFIER_ANXIOUS": "+15%"
-        }
-    },
-
-    # Pravila za čišćenje i sanitizaciju naziva datoteka
+    # ===== SANITIZATION - samo CHAR_MAP koji se ne može konfigurirati =====
     "SANITIZATION": {
         "CHAR_MAP": str.maketrans("čćšđžŽŠĐČĆ", "ccsdzZSDCC"),
-        "REPLACE_SPACES_WITH": "-",
-        "PREFIX_PADDING": 3
-    },
+    }
 
-    # Regex uzorci za detekciju poglavlja
-    "CHAPTER_PATTERNS": [
-        r"^(CHAPTER|Chapter|POGLAVLJE|Poglavlje)\s+\d+",
-        r"^(EPILOGUE|PROLOGUE|Epilogue|Prologue)",
-        r"^[A-Z\s]{4,25}$"
-    ]
+    # OSTALIH VRIJEDNOSTI NEMA OVDJE - sve su u config/settings.py
 }
+
+
+# ==============================================================================
+# Funkcija za učitavanje konfiguracije iz Python datoteke
+# ==============================================================================
+
+def uc_konfiguraciju_iz_python_datoteke(config_dict: dict[str, Any]) -> dict[str, Any]:
+    """Učitava konfiguraciju iz config/settings.py i spaja je s hardkodiiranim vrijednostima.
+    
+    Ova funkcija omogućava da se sve vrijednosti konfiguriraju kroz Python datoteku bez
+    potrebe za escape znakovima. Multi-line stringovi se mogu pisati kao običan Python kod.
+    
+    Args:
+        config_dict: Hardkodiirana zadana konfiguracija (CONFIG)
+    
+    Returns:
+        Spojena konfiguracija sa vrijednostima iz settings.py (ako postoji)
+    """
+    config_dir = config_dict["DIR"]["CONFIG_DIR"]
+    config_datoteka = os.path.join(config_dir, "settings.py")
+    
+    if not os.path.exists(config_datoteka):
+        logging.info(f"Konfigurijska Python datoteka nije pronađena: {config_datoteka}")
+        return config_dict
+    
+    try:
+        # Dinamički učitaj Python modul iz putanje
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("config_settings", config_datoteka)
+        config_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config_module)
+        
+        if hasattr(config_module, 'SETTINGS'):
+            ucitana_config = config_module.SETTINGS
+            
+            # Duboka spajanja konfiguracije (recursive merge)
+            def spoji_dictionaryje(bazna: dict, nova: dict) -> dict:
+                """Rekurzivno spaja novi dictionary u bazni."""
+                rezultat = bazna.copy()
+                for kljuc, vrijednost in nova.items():
+                    if kljuc in rezultat and isinstance(rezultat[kljuc], dict) and isinstance(vrijednost, dict):
+                        rezultat[kljuc] = spoji_dictionaryje(rezultat[kljuc], vrijednost)
+                    else:
+                        rezultat[kljuc] = vrijednost
+                return rezultat
+            
+            config_dict = spoji_dictionaryje(config_dict, ucitana_config)
+            logging.info(f"Konfiguracija uspješno učitana iz: {config_datoteka}")
+        else:
+            logging.warning(f"Datoteka {config_datoteka} nema SETTINGS dictionary")
+        
+    except Exception as e:
+        logging.error(f"Greška pri učitavanju konfiguracije iz Python datoteke: {e}")
+    
+    return config_dict
+
+
+# Učitaj konfiguraciju iz settings.py i spoji je s hardkodiiranim vrijednostima
+CONFIG = uc_konfiguraciju_iz_python_datoteke(CONFIG)
+
+# Osiguraj da CHAR_MAP postoji (jer se ne može pohraniti u Python datoteci kao lako editabilno)
+if "CHAR_MAP" not in CONFIG.get("SANITIZATION", {}):
+    CONFIG["SANITIZATION"]["CHAR_MAP"] = str.maketrans("čćšđžŽŠĐČĆ", "ccsdzZSDCC")
+
+
+# ==============================================================================
+# Funkcija za automatsku detekciju aktivnog modela iz LM Studio
+# ==============================================================================
+
+def detektuj_aktivni_model() -> Optional[str]:
+    """Dohvata prvi dostupan model iz LM Studio API-ja.
+    
+    Ako je AUTO_DETECT_MODEL uključen, ova funkcija se poziva da pronađe
+    koji je model trenutno aktivan u LM Studio, umjesto da korisnik ručno
+    upisuje API_MODEL u settings.py
+    
+    Returns:
+        Naziv modela ako je pronađen, None ako nije dostupan API
+    """
+    try:
+        api_url = CONFIG["TRANSLATION"]["API_URL"]
+        # Zamijeni /v1/chat/completions sa /v1/models
+        models_url = api_url.replace("/v1/chat/completions", "/v1/models")
+        
+        with urllib.request.urlopen(models_url, timeout=5) as odgovor:
+            data = json.loads(odgovor.read().decode('utf-8'))
+            if data.get("data") and len(data["data"]) > 0:
+                aktivni_model = data["data"][0]["id"]
+                logging.info(f"✅ Auto-detektovan aktivni model: {aktivni_model}")
+                return aktivni_model
+    except Exception as e:
+        logging.warning(f"Nije moguća auto-detekcija modela: {e}")
+    
+    return None
+
+
+# Auto-detektuj model ako je postavka uključena
+if CONFIG["TRANSLATION"].get("AUTO_DETECT_MODEL", False) and not CONFIG["TRANSLATION"].get("API_MODEL"):
+    detektirani_model = detektuj_aktivni_model()
+    if detektirani_model:
+        CONFIG["TRANSLATION"]["API_MODEL"] = detektirani_model
+    else:
+        logging.error("Nije moguće detektovati model. Postavite API_MODEL u config/settings.py")
+
+
+# ==============================================================================
+# Globalne varijable za metadata o prijevodu
+# ==============================================================================
+TRANSLATION_METADATA = {
+    "model": CONFIG["TRANSLATION"].get("API_MODEL", "Nepoznat"),
+    "timestamp": None  # Će se postaviti pri svakom prijevodu
+}
+
+
+def generiraj_metadata_header() -> str:
+    """Generiraj metadata header sa modelom i vremenom prijevoda.
+    
+    Returns:
+        String sa header-om: # Model: qwen/qwen3.5-9b | Vrijeme: 2026-07-27 20:15:43
+    """
+    if not CONFIG["TRANSLATION"].get("ADD_METADATA_HEADER", False):
+        return ""
+    
+    model = TRANSLATION_METADATA.get("model", "Nepoznat")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    return f"# Model: {model} | Vrijeme: {timestamp}\n"
 
 # Osiguraj kreiranje svih potrebnih direktorija iz konfiguracije
 for mapa in CONFIG["DIR"].values():
@@ -1339,12 +1416,16 @@ async def main() -> None:
 
             prevedeni_tekst = prevedi_tekst_paragrafski(poglavlje["sadrzaj"])
 
+            # Dodaj metadata header ako je uključeno u settings.py
+            metadata_header = generiraj_metadata_header()
+            tekst_za_pisanje = metadata_header + prevedeni_tekst if metadata_header else prevedeni_tekst
+
             tekst_file_name = f"{redni_broj}_{cisti_naslov_poglavlja}.txt"
             putanja_tekst = os.path.join(tekst_izlazna_mapa, tekst_file_name)
             putanja_tekst = generiraj_sigurnu_putanju(putanja_tekst)
 
             with open(putanja_tekst, "w", encoding="utf-8") as tf:
-                tf.write(prevedeni_tekst)
+                tf.write(tekst_za_pisanje)
 
             print(f"  [SPREMLJENO] {os.path.basename(putanja_tekst)}")
 
