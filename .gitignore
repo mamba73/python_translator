@@ -1,0 +1,18 @@
+app/models/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+.env
+venv/
+knjige_env/
+
+# Ignoriraj sve datoteke unutar input i output direktorija, ali zadrži direktorije
+**/input/*
+**/output/*
+!**/input/.gitkeep
+!**/output/.gitkeep
