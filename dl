@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Putanja i ime: ./dl
+# Verzija: 1.0.0
+
+# Naziv virtualnog okruženja
+VENV_DIR="knjige_env"
+
+echo "=================================================="
+echo "    Downloader GGUF v1.0.0 - Pokretanje sustava   "
+echo "=================================================="
+
+# 1. Provjera i automatska instalacija virtualnog okruženja (izolacija)
+if [ ! -d "$VENV_DIR" ]; then
+    echo "[INFO] Kreiram izolirano Python okruženje '$VENV_DIR'..."
+    python -m venv "$VENV_DIR"
+    
+    echo "[INFO] Aktiviram okruženje i instaliram potrebne pakete..."
+    source "$VENV_DIR/Scripts/activate"
+    
+    # Nadogradnja pip-a i instalacija potrebnih biblioteka
+    pip install --upgrade pip
+    pip install edge-tts pypdf python-docx ebooklib
+    pip install -U "huggingface_hub[cli]"
+    echo "[INFO] Instalacija uspješno završena."
+else
+    # Ako okruženje već postoji, aktiviraj ga
+    source "$VENV_DIR/Scripts/activate"
+    
+    # Provjeri jesu li svi potrebni paketi instalirani
+    echo "[INFO] Provjeravam instalirane pakete..."
+    pip install --upgrade pip --quiet
+    pip install edge-tts pypdf python-docx ebooklib --quiet
+    pip install -U "huggingface_hub[cli]" --quiet
+    echo "[INFO] Paketi su ažurni."
+fi
+
+# 2. Pokretanje glavne aplikacije i prosljeđivanje svih argumenata korisnika
+python download.py "$@"
+
+# Deaktivacija virtualnog okruženja po završetku rada
+deactivate

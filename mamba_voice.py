@@ -134,8 +134,8 @@ if "CHAR_MAP" not in CONFIG.get("SANITIZATION", {}):
 # Funkcija za automatsku detekciju aktivnog modela iz LM Studio
 # ==============================================================================
 
-def detektuj_aktivni_model() -> Optional[str]:
-    """Dohvata prvi dostupan model iz LM Studio API-ja.
+def detektiraj_aktivni_model() -> Optional[str]:
+    """Pronalazi prvi dostupan model iz LM Studio API-ja.
     
     Ako je AUTO_DETECT_MODEL uključen, ova funkcija se poziva da pronađe
     koji je model trenutno aktivan u LM Studio, umjesto da korisnik ručno
@@ -161,9 +161,9 @@ def detektuj_aktivni_model() -> Optional[str]:
     return None
 
 
-# Auto-detektuj model ako je postavka uključena
+# Auto-detektiraj model ako je postavka uključena
 if CONFIG["TRANSLATION"].get("AUTO_DETECT_MODEL", False) and not CONFIG["TRANSLATION"].get("API_MODEL"):
-    detektirani_model = detektuj_aktivni_model()
+    detektirani_model = detektiraj_aktivni_model()
     if detektirani_model:
         CONFIG["TRANSLATION"]["API_MODEL"] = detektirani_model
     else:
@@ -691,6 +691,11 @@ def prevedi_odlomak_lm_studio(odlomak: str) -> str:
     max_tokena = CONFIG["TRANSLATION"]["MAX_TOKENS"]
     system_prompt = CONFIG["TRANSLATION"]["SYSTEM_PROMPT"]
 
+    top_p = CONFIG["TRANSLATION"].get("TOP_P", 0.85)
+    min_p = CONFIG["TRANSLATION"].get("MIN_P", 0.05)
+    top_k = CONFIG["TRANSLATION"].get("TOP_K", 20)
+    repeat_penalty = CONFIG["TRANSLATION"].get("REPEAT_PENALTY", 1.15)
+
     payload: dict[str, Any] = {
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -698,11 +703,20 @@ def prevedi_odlomak_lm_studio(odlomak: str) -> str:
         ],
         "temperature": temperatura,
         "max_tokens": max_tokena,
+        "top_p": top_p,
+        "min_p": min_p,
+        "top_k": top_k,
+        "repeat_penalty": repeat_penalty,
         "stream": False
     }
 
     if CONFIG["TRANSLATION"].get("API_MODEL"):
         payload["model"] = CONFIG["TRANSLATION"]["API_MODEL"]
+
+    # Isključi reasoning/thinking ako je DISABLE_REASONING uključeno
+    if CONFIG["TRANSLATION"].get("DISABLE_REASONING", True):
+        payload["reasoning"] = False
+        payload["thinking"] = False
 
     podaci_json = json.dumps(payload, ensure_ascii=False).encode('utf-8')
     zahtjev = urllib.request.Request(
@@ -794,6 +808,178 @@ def prevedi_tekst_paragrafski(tekst_eng: str) -> str:
         )
 
     # Spajanje s \n\n - savršeno očuvanje originalne strukture
+    konacni_tekst = "\n\n".join(prevedeni_odlomci)
+
+    # Završna unifikacija navodnika na cijelom tekstu
+    konacni_tekst = unificiraj_navodnike(konacni_tekst)
+
+    return konacni_tekst
+
+
+# ==============================================================================
+# Modul za strojno prevođenje putem LM Studio API-ja (rečenica-po-rečenicu)
+# ==============================================================================
+
+def prevedi_recenicu_lm_studio(recenica: str) -> str:
+    """Prevodi jednu rečenicu engleskog teksta na hrvatski koristeći LM Studio API.
+
+    Svaka rečenica se omota u <source_text> i </source_text> tagove prije slanja
+    API-ju. Nakon prijevoda primjenjuje:
+    - Unifikaciju navodnika (sve -> ")
+    - Čišćenje procurjelih fraza
+
+    Args:
+        recenica: Engleski tekst jedne rečenice.
+
+    Returns:
+        Prevedena hrvatska rečenica (ili original ako je preskočena).
+    """
+    if len(recenica.strip()) <= 2:
+        return recenica
+
+    if je_strukturni_ili_kratak(recenica):
+        logging.debug(f"Preskačem LLM za kratku/strukturnu rečenicu: '{recenica[:50]}...'")
+        return recenica
+
+    api_url = CONFIG["TRANSLATION"]["API_URL"]
+    temperatura = CONFIG["TRANSLATION"]["TEMPERATURE"]
+    max_tokena = CONFIG["TRANSLATION"]["MAX_TOKENS"]
+    system_prompt = CONFIG["TRANSLATION"]["SYSTEM_PROMPT"]
+
+    top_p = CONFIG["TRANSLATION"].get("TOP_P", 0.85)
+    min_p = CONFIG["TRANSLATION"].get("MIN_P", 0.05)
+    top_k = CONFIG["TRANSLATION"].get("TOP_K", 20)
+    repeat_penalty = CONFIG["TRANSLATION"].get("REPEAT_PENALTY", 1.15)
+
+    # Omotaj rečenicu u <source_text> tagove
+    tagged_content = f"<source_text>{recenica}</source_text>"
+
+    payload: dict[str, Any] = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": tagged_content}
+        ],
+        "temperature": temperatura,
+        "max_tokens": max_tokena,
+        "top_p": top_p,
+        "min_p": min_p,
+        "top_k": top_k,
+        "repeat_penalty": repeat_penalty,
+        "stream": False
+    }
+
+    if CONFIG["TRANSLATION"].get("API_MODEL"):
+        payload["model"] = CONFIG["TRANSLATION"]["API_MODEL"]
+
+    # Isključi reasoning/thinking ako je DISABLE_REASONING uključeno
+    if CONFIG["TRANSLATION"].get("DISABLE_REASONING", True):
+        payload["reasoning"] = False
+        payload["thinking"] = False
+
+    podaci_json = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    zahtjev = urllib.request.Request(
+        api_url,
+        data=podaci_json,
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json"
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(zahtjev, timeout=120) as odgovor:
+            odgovor_json = json.loads(odgovor.read().decode('utf-8'))
+            prijevod = odgovor_json["choices"][0]["message"]["content"].strip()
+
+            # Post-processing: unifikacija navodnika
+            prijevod = unificiraj_navodnike(prijevod)
+            # Post-processing: čišćenje procurjelih fraza
+            prijevod = ocisti_leaked_prijevod(prijevod)
+
+            logging.debug(f"API odgovor primljen za rečenicu ({len(prijevod)} znakova)")
+            return prijevod
+    except urllib.error.HTTPError as e:
+        logging.error(f"HTTP greška pri API pozivu: {e.code} - {e.reason}")
+        return recenica
+    except urllib.error.URLError as e:
+        logging.error(
+            f"LM Studio API nije dostupan na {api_url}. "
+            f"Provjerite je li LM Studio pokrenut i server aktivan. Greška: {e.reason}"
+        )
+        return recenica
+    except json.JSONDecodeError as e:
+        logging.error(f"Neispravan JSON odgovor iz API-ja: {e}")
+        return recenica
+    except Exception as e:
+        logging.error(f"Neočekivana greška pri API pozivu: {e}")
+        return recenica
+
+
+def prevedi_tekst_recenica_po_recenicu(tekst_eng: str) -> str:
+    """Prevodi engleski tekst na hrvatski rečenicu po rečenicu.
+
+    Dijeli tekst na rečenice pomoću regex split-a na granicama rečenica
+    ('.', '!', '?'), šalje svaku rečenicu zasebno omotanu u <source_text> tagove
+    na LM Studio API, zatim ih spaja natrag u kohezivni paragraf.
+    Ovo sprječava attention drift i gramatičku degradaciju u dugim izlazima.
+
+    Progress bar se ažurira nakon svake rečenice u stvarnom vremenu.
+
+    Args:
+        tekst_eng: Engleski tekst koji može sadržavati više rečenica.
+
+    Returns:
+        Prevedeni hrvatski tekst s očuvanom strukturom rečenica.
+    """
+    # Prvo podijeli na odlomke da očuva strukturu paragrafa
+    odlomci_raw = tekst_eng.split('\n\n')
+    odlomci: list[str] = []
+    for o in odlomci_raw:
+        o_strip = o.strip()
+        if o_strip:
+            odlomci.append(o_strip)
+
+    if not odlomci:
+        return ""
+
+    prevedeni_odlomci: list[str] = []
+    ukupno_odlomaka = len(odlomci)
+    ukupno_rijeci = sum(len(o.split()) for o in odlomci)
+    akumulirane_rijeci = 0
+
+    for od_idx, odlomak in enumerate(odlomci):
+        # Podijeli odlomak na rečenice koristeći regex
+        recenice = re.split(r'(?<=[.!?])\s+', odlomak)
+        recenice = [r.strip() for r in recenice if r.strip()]
+
+        if not recenice:
+            prevedeni_odlomci.append("")
+            continue
+
+        prevedene_recenice: list[str] = []
+        for rec_idx, recenica in enumerate(recenice):
+            rijeci_u_recenici = len(recenica.split())
+            akumulirane_rijeci += rijeci_u_recenici
+
+            try:
+                prevedena = prevedi_recenicu_lm_studio(recenica)
+                prevedene_recenice.append(prevedena)
+            except Exception as e:
+                logging.error(f"Greška pri prevođenju rečenice {rec_idx + 1}/{len(recenice)}: {e}")
+                prevedene_recenice.append(recenica)
+
+            prikazi_progres(
+                od_idx + 1,
+                ukupno_odlomaka,
+                f"Odlomak: {od_idx + 1}/{ukupno_odlomaka} | Rečenica: {rec_idx + 1}/{len(recenice)}",
+                f"riječi: {akumulirane_rijeci}/{ukupno_rijeci} ({int(akumulirane_rijeci / ukupno_rijeci * 100)}%)"
+            )
+
+        # Spoji prevedene rečenice natrag u odlomak
+        prevedeni_odlomci.append(" ".join(prevedene_recenice))
+
+    # Spajanje odlomaka s \n\n - očuvanje originalne strukture
     konacni_tekst = "\n\n".join(prevedeni_odlomci)
 
     # Završna unifikacija navodnika na cijelom tekstu
@@ -1414,7 +1600,10 @@ async def main() -> None:
                 f"{poglavlje['naslov']} ({rijeci_u_poglavlju} riječi)"
             )
 
-            prevedeni_tekst = prevedi_tekst_paragrafski(poglavlje["sadrzaj"])
+            if CONFIG["TRANSLATION"].get("SENTENCE_BY_SENTENCE", True):
+                prevedeni_tekst = prevedi_tekst_recenica_po_recenicu(poglavlje["sadrzaj"])
+            else:
+                prevedeni_tekst = prevedi_tekst_paragrafski(poglavlje["sadrzaj"])
 
             # Dodaj metadata header ako je uključeno u settings.py
             metadata_header = generiraj_metadata_header()
