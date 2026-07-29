@@ -220,7 +220,7 @@ logging.basicConfig(
 HISTORY_DATOTEKA = os.path.join(CONFIG["DIR"]["CACHE"], "history.json")
 
 
-def spremi_povijest(mode_number: str, odabrane_knjige: list[dict[str, str]], nacin_rada: str, tts_book: str = "") -> None:
+def spremi_povijest(mode_number: str, odabrane_knjige: list[dict[str, str]], nacin_rada: str, tts_book: str = "", izlazni_dir: str = "") -> None:
     """Sprema zadnji odabir u history cache.
     
     Args:
@@ -228,6 +228,7 @@ def spremi_povijest(mode_number: str, odabrane_knjige: list[dict[str, str]], nac
         odabrane_knjige: Lista odabranih knjiga (rječnici s putanja, naziv, itd.).
         nacin_rada: Interni naziv načina rada (translate, full, tts_only, extract, convert_text).
         tts_book: Ime knjige za TTS (samo za način 3).
+        izlazni_dir: Naziv izlaznog direktorija (output/text/...) za ponovno korištenje.
     """
     try:
         base_dir = CONFIG["DIR"]["BASE"]
@@ -243,6 +244,7 @@ def spremi_povijest(mode_number: str, odabrane_knjige: list[dict[str, str]], nac
             "nacin_rada": nacin_rada,
             "odabrane_knjige": portabilne_knjige,
             "tts_book": tts_book,
+            "izlazni_dir": izlazni_dir,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         with open(HISTORY_DATOTEKA, "w", encoding="utf-8") as f:
@@ -708,6 +710,91 @@ def segmentiraj_poglavlja_po_odlomcima(tekst: str) -> list[dict[str, str]]:
 
 
 # ==============================================================================
+# Modul za Character Lore Memory (dinamički injektor profila likova)
+# ==============================================================================
+
+# Globalna varijabla za trenutnu putanju knjige (postavlja se u main() prije obrade)
+_TRENUTNA_PUTANJA_KNJIGE: str = ""
+_UCITANI_LIKOVI: dict[str, str] = {}
+
+def postavi_trenutnu_knjigu(putanja_knjige: str) -> None:
+    """Postavlja globalnu putanju trenutne knjige i učitava likove memoriju.
+    
+    Očitava (ili kreira) likovi_memorija.json u direktoriju izvorne knjige
+    i sprema profile u globalni cache za korištenje u API pozivima.
+    
+    Args:
+        putanja_knjige: Apsolutna putanja do izvorne datoteke ili mape knjige.
+    """
+    global _TRENUTNA_PUTANJA_KNJIGE, _UCITANI_LIKOVI
+    
+    _TRENUTNA_PUTANJA_KNJIGE = putanja_knjige
+    _UCITANI_LIKOVI = {}
+    
+    # Odredi ciljani direktorij (ako je mapa, koristi nju; ako je datoteka, koristi njen roditelj)
+    if os.path.isdir(putanja_knjige):
+        ciljni_dir = putanja_knjige
+    else:
+        ciljni_dir = os.path.dirname(putanja_knjige)
+    
+    json_putanja = os.path.join(ciljni_dir, "likovi_memorija.json")
+    
+    if not os.path.exists(json_putanja):
+        try:
+            with open(json_putanja, "w", encoding="utf-8") as f:
+                json.dump({}, f, ensure_ascii=False, indent=2)
+            logging.info(f"✅ Kreiran prazan fajl likovi_memorija.json: {json_putanja}")
+            return
+        except Exception as e:
+            logging.warning(f"Nije moguće kreirati likovi_memorija.json: {e}")
+            return
+    
+    try:
+        with open(json_putanja, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data:
+            _UCITANI_LIKOVI = data
+            logging.info(f"✅ Učitano {len(_UCITANI_LIKOVI)} profila likova iz: {json_putanja}")
+        else:
+            logging.info("ℹ️ likovi_memorija.json je prazan - koristim standardni SYSTEM_PROMPT")
+    except Exception as e:
+        logging.warning(f"Greška pri učitavanju likovi_memorija.json: {e}")
+
+
+def generiraj_system_prompt_sa_likovima() -> str:
+    """Generira finalni system prompt s opcionalnim injektom profila likova.
+    
+    Ako postoje učitani likovi, formatira ih na vrh system prompt-a
+    u skladu sa strogim formatom CHARACTER GENDER REGISTER.
+    
+    Returns:
+        Modificirani system prompt string (s likovima ili bez).
+    """
+    system_prompt = CONFIG["TRANSLATION"]["SYSTEM_PROMPT"]
+    
+    if not _UCITANI_LIKOVI:
+        return system_prompt
+    
+    # Formatiraj profile likova u stricktni blok
+    linije_likova: list[str] = []
+    for ime, opis in _UCITANI_LIKOVI.items():
+        linije_likova.append(f"{ime}: {opis}")
+    
+    if not linije_likova:
+        return system_prompt
+    
+    likovni_blok = (
+        "CHARACTER GENDER REGISTER (STRICT DIRECTIVE):\n"
+        "For the duration of this text, adhere to these strictly locked character profiles:\n"
+        + "\n".join(linije_likova) + "\n"
+        + "-" * 80 + "\n"
+    )
+    
+    logging.debug(f"Injektovan likovni blok u system prompt ({len(_UCITANI_LIKOVI)} profila)")
+    return likovni_blok + system_prompt
+
+
+# ==============================================================================
 # Modul za strojno prevođenje putem LM Studio API-ja (paragrafski)
 # ==============================================================================
 
@@ -767,7 +854,8 @@ def prevedi_odlomak_lm_studio(odlomak: str) -> str:
     api_url = CONFIG["TRANSLATION"]["API_URL"]
     temperatura = CONFIG["TRANSLATION"]["TEMPERATURE"]
     max_tokena = CONFIG["TRANSLATION"]["MAX_TOKENS"]
-    system_prompt = CONFIG["TRANSLATION"]["SYSTEM_PROMPT"]
+    # Dinamički generiraj system prompt s opcionalnim profilima likova
+    system_prompt = generiraj_system_prompt_sa_likovima()
 
     top_p = CONFIG["TRANSLATION"].get("TOP_P", 0.85)
     min_p = CONFIG["TRANSLATION"].get("MIN_P", 0.05)
@@ -922,7 +1010,8 @@ def prevedi_recenicu_lm_studio(recenica: str) -> str:
     api_url = CONFIG["TRANSLATION"]["API_URL"]
     temperatura = CONFIG["TRANSLATION"]["TEMPERATURE"]
     max_tokena = CONFIG["TRANSLATION"]["MAX_TOKENS"]
-    system_prompt = CONFIG["TRANSLATION"]["SYSTEM_PROMPT"]
+    # Dinamički generiraj system prompt s opcionalnim profilima likova
+    system_prompt = generiraj_system_prompt_sa_likovima()
 
     top_p = CONFIG["TRANSLATION"].get("TOP_P", 0.85)
     min_p = CONFIG["TRANSLATION"].get("MIN_P", 0.05)
@@ -1628,6 +1717,9 @@ async def main() -> None:
         putanja_knjige = knjiga["putanja"]
         naziv_knjige = knjiga["naziv"]
         je_preciscena = knjiga.get("je_preciscen") == "true"
+
+        # Učitaj Character Lore Memory za ovu knjigu
+        postavi_trenutnu_knjigu(putanja_knjige)
 
         print(f"\n{'=' * 60}")
         print(f"KNJIGA {bk + 1}/{ukupno_knjiga}: {naziv_knjige}")
