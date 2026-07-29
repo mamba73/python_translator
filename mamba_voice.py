@@ -41,7 +41,7 @@ except ImportError:
 # Ova CONFIG će biti spojena sa vrijednostima iz settings.py pri pokretanju.
 # ==============================================================================
 CONFIG: dict[str, Any] = {
-    "VERSION": "1.0.6",
+    "VERSION": "1.0.7",
     "PROJECT_NAME": "MambaBookVoice",
 
     # ===== SAMO DIR PUTANJE (dinamičke, trebaju biti ovdje) =====
@@ -49,6 +49,7 @@ CONFIG: dict[str, Any] = {
         "BASE": os.path.dirname(os.path.abspath(__file__)),
         "LOGS": os.path.join(os.path.dirname(os.path.abspath(__file__)), "doc", "logs"),
         "MODELS": os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"),
+        "CACHE": os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache"),
         "CONFIG_DIR": os.path.join(os.path.dirname(os.path.abspath(__file__)), "config"),
         "INPUT": os.path.join(os.path.dirname(os.path.abspath(__file__)), "input"),
         "INPUT_PROCESSED": os.path.join(
@@ -210,6 +211,83 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
+
+
+# ==============================================================================
+# Cache / History funkcije
+# ==============================================================================
+
+HISTORY_DATOTEKA = os.path.join(CONFIG["DIR"]["CACHE"], "history.json")
+
+
+def spremi_povijest(mode_number: str, odabrane_knjige: list[dict[str, str]], nacin_rada: str, tts_book: str = "") -> None:
+    """Sprema zadnji odabir u history cache.
+    
+    Args:
+        mode_number: Broj načina rada (1-5) za prikaz opisa.
+        odabrane_knjige: Lista odabranih knjiga (rječnici s putanja, naziv, itd.).
+        nacin_rada: Interni naziv načina rada (translate, full, tts_only, extract, convert_text).
+        tts_book: Ime knjige za TTS (samo za način 3).
+    """
+    try:
+        base_dir = CONFIG["DIR"]["BASE"]
+        portabilne_knjige = []
+        for knj in odabrane_knjige:
+            knj_kopija = knj.copy()
+            if "putanja" in knj_kopija and knj_kopija["putanja"].startswith(base_dir):
+                knj_kopija["putanja"] = knj_kopija["putanja"][len(base_dir):]
+            portabilne_knjige.append(knj_kopija)
+
+        history_data = {
+            "mode_number": mode_number,
+            "nacin_rada": nacin_rada,
+            "odabrane_knjige": portabilne_knjige,
+            "tts_book": tts_book,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        with open(HISTORY_DATOTEKA, "w", encoding="utf-8") as f:
+            json.dump(history_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.warning(f"Nije moguće spremiti history: {e}")
+
+
+def ucitaj_povijest() -> Optional[dict]:
+    """Učitava zadnji spremljeni history iz cache/history.json.
+    
+    Returns:
+        Dictionar sa history podacima ili None ako ne postoji.
+    """
+    if not os.path.exists(HISTORY_DATOTEKA):
+        return None
+    try:
+        with open(HISTORY_DATOTEKA, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        base_dir = CONFIG["DIR"]["BASE"]
+        for knj in data.get("odabrane_knjige", []):
+            if "putanja" in knj:
+                # Ako putanja ne počinje s base_dir, dodaj base_dir ispred
+                # Ovo rješava problem na Windowsu gdje \putanja\vodi\do isabs=True
+                if not knj["putanja"].startswith(base_dir):
+                    # Ukloni vodeći \ ili / ako postoji (relativna putanja)
+                    rel_putanja = knj["putanja"].lstrip("\\/")
+                    knj["putanja"] = os.path.join(base_dir, rel_putanja)
+        return data
+    except Exception as e:
+        logging.warning(f"Nije moguće učitati history: {e}")
+        return None
+
+
+def opisi_nacin_rada(mode_number: str) -> str:
+    """Vraća ljudski čitljiv opis načina rada prema broju."""
+    opisi = {
+        "1": "Translate Only",
+        "2": "Translate + Convert to MP3",
+        "3": "TTS Only from Existing Translations",
+        "4": "Extract and Clean Raw Text Only",
+        "5": "Convert Document to Clean Text"
+    }
+    return opisi.get(mode_number, f"Način {mode_number}")
+
 
 # ==============================================================================
 # Pomoćne funkcije za čišćenje i sanitizaciju
@@ -1293,7 +1371,7 @@ def interaktivni_izbornik() -> tuple[list[dict[str, str]], str, str]:
     """
     while True:
         ocisti_ekran()
-        print("=== MambaBookVoice v1.0.6 — Odabir načina rada ===\n")
+        print("=== MambaBookVoice v1.0.7 — Odabir načina rada ===\n")
         print("Odaberite način rada:\n")
         print("  1. Translate Only (Prijevod u tekstualni format)")
         print("  2. Translate + Convert to MP3 (Potpuni proces)")
@@ -1301,7 +1379,37 @@ def interaktivni_izbornik() -> tuple[list[dict[str, str]], str, str]:
         print("  4. Extract and Clean Raw Text Only (Čišćenje sirovog teksta)")
         print("  5. Convert Document to Clean Text (PDF/DOCX/EPUB/MOBI -> TXT)\n")
 
-        izbor = input("Unesite broj načina rada (1-5): ").strip()
+        # Provjeri postoji li history i ponudi Y opciju
+        history_data = ucitaj_povijest()
+        if history_data and history_data.get("mode_number") and history_data.get("nacin_rada"):
+            print(f"  Y - Ponovi zadnju radnju: [{history_data['mode_number']}] {opisi_nacin_rada(history_data['mode_number'])}")
+        print("  X - Izlaz iz aplikacije\n")
+
+        izbor = input("Unesite broj načina rada (1-5) / Y / X: ").strip().upper()
+
+        if izbor == 'X':
+            print("\nPotvrda izlaska iz aplikacije? (D/N): ", end="")
+            potvrda = input().strip().upper()
+            if potvrda == 'D':
+                print("\n[Dovidenja!]")
+                sys.exit(0)
+            continue
+
+        if izbor == 'Y':
+            history_data = ucitaj_povijest()
+            if history_data and history_data.get("mode_number") and history_data.get("nacin_rada"):
+                mode_number = history_data["mode_number"]
+                nacin_rada = history_data["nacin_rada"]
+                odabrane_knjige = history_data.get("odabrane_knjige", [])
+                tts_book = history_data.get("tts_book", "")
+                print(f"\n[History] Ponavljam radnju: [{mode_number}] {opisi_nacin_rada(mode_number)}")
+                if nacin_rada == "tts_only":
+                    return [], nacin_rada, tts_book
+                else:
+                    return odabrane_knjige, nacin_rada, ""
+            print("[History] Nema spremljene povijesti. Pritisnite Enter.")
+            input()
+            continue
 
         if izbor == "1":
             knjige = skeniraj_input_datoteke()
@@ -1315,6 +1423,7 @@ def interaktivni_izbornik() -> tuple[list[dict[str, str]], str, str]:
                 print("Niste odabrali nijednu knjigu. Pritisnite Enter za povratak...")
                 input()
                 continue
+            spremi_povijest("1", odabrane, "translate")
             return odabrane, "translate", ""
 
         elif izbor == "2":
@@ -1329,6 +1438,7 @@ def interaktivni_izbornik() -> tuple[list[dict[str, str]], str, str]:
                 print("Niste odabrali nijednu knjigu. Pritisnite Enter za povratak...")
                 input()
                 continue
+            spremi_povijest("2", odabrane, "full")
             return odabrane, "full", ""
 
         elif izbor == "3":
@@ -1341,6 +1451,7 @@ def interaktivni_izbornik() -> tuple[list[dict[str, str]], str, str]:
             odabrana = prikazi_jednostruki_izbor(knjige_mape, "Odaberite knjigu za TTS generiranje:")
             if odabrana is None:
                 continue
+            spremi_povijest("3", [], "tts_only", odabrana)
             return [], "tts_only", odabrana
 
         elif izbor == "4":
@@ -1355,6 +1466,7 @@ def interaktivni_izbornik() -> tuple[list[dict[str, str]], str, str]:
                 print("Niste odabrali nijednu knjigu. Pritisnite Enter za povratak...")
                 input()
                 continue
+            spremi_povijest("4", odabrane, "extract")
             return odabrane, "extract", ""
 
         elif izbor == "5":
@@ -1370,6 +1482,7 @@ def interaktivni_izbornik() -> tuple[list[dict[str, str]], str, str]:
                 print("Niste odabrali nijednu datoteku. Pritisnite Enter za povratak...")
                 input()
                 continue
+            spremi_povijest("5", odabrane, "convert_text")
             return odabrane, "convert_text", ""
 
         else:
@@ -1404,7 +1517,10 @@ def prikazi_checkbox_izbor(
                 oznaka = " [očišćeno]"
             print(f"{checkbox} {idx + 1}. {knj['naziv']}{oznaka}")
 
-        unos = input("\nVaš unos (broj / ALL / S): ").strip().upper()
+        unos = input("\nVaš unos (broj / ALL / S / X): ").strip().upper()
+
+        if unos == 'X':
+            return []
 
         if unos == 'S':
             if any(izabrane_oznake):
@@ -1447,10 +1563,10 @@ def prikazi_jednostruki_izbor(opcije: list[str], naslov: str = "") -> Optional[s
         for idx, opc in enumerate(opcije):
             print(f"  {idx + 1}. {opc}")
 
-        print("\n  'Q' za odustajanje\n")
+        print("\n  'Q' za odustajanje, 'X' za povratak u glavni izbornik\n")
         unos = input("Unesite broj opcije: ").strip().upper()
 
-        if unos == 'Q':
+        if unos == 'Q' or unos == 'X':
             return None
         elif unos.isdigit():
             broj = int(unos) - 1

@@ -11,6 +11,7 @@ build/
 venv/
 knjige_env/
 doc/logs/*
+cache/*
 
 # Ignoriraj sve datoteke unutar input i output direktorija, ali zadrži direktorije
 **/input/*
