@@ -1,5 +1,5 @@
 # Putanja i ime: ./mamba_voice.py
-# Verzija: 1.0.6
+# Verzija: 1.0.7
 
 import os
 import sys
@@ -220,7 +220,7 @@ logging.basicConfig(
 HISTORY_DATOTEKA = os.path.join(CONFIG["DIR"]["CACHE"], "history.json")
 
 
-def spremi_povijest(mode_number: str, odabrane_knjige: list[dict[str, str]], nacin_rada: str, tts_book: str = "", izlazni_dir: str = "") -> None:
+def spremi_povijest(mode_number: str, odabrane_knjige: list[dict[str, str]], nacin_rada: str, tts_book: str = "", izlazni_dir_tekst: str = "", izlazni_dir_mp3: str = "") -> None:
     """Sprema zadnji odabir u history cache.
     
     Args:
@@ -228,7 +228,8 @@ def spremi_povijest(mode_number: str, odabrane_knjige: list[dict[str, str]], nac
         odabrane_knjige: Lista odabranih knjiga (rječnici s putanja, naziv, itd.).
         nacin_rada: Interni naziv načina rada (translate, full, tts_only, extract, convert_text).
         tts_book: Ime knjige za TTS (samo za način 3).
-        izlazni_dir: Naziv izlaznog direktorija (output/text/...) za ponovno korištenje.
+        izlazni_dir_tekst: Naziv izlaznog direktorija za tekst (output/text/...) za ponovno korištenje.
+        izlazni_dir_mp3: Naziv izlaznog direktorija za MP3 (output/mp3/...) za ponovno korištenje.
     """
     try:
         base_dir = CONFIG["DIR"]["BASE"]
@@ -239,12 +240,25 @@ def spremi_povijest(mode_number: str, odabrane_knjige: list[dict[str, str]], nac
                 knj_kopija["putanja"] = knj_kopija["putanja"][len(base_dir):]
             portabilne_knjige.append(knj_kopija)
 
+        # Učitaj postojeći history da sačuvamo izlazne direktorije ako već postoje
+        postojeci_history = {}
+        if os.path.exists(HISTORY_DATOTEKA):
+            with open(HISTORY_DATOTEKA, "r", encoding="utf-8") as f:
+                postojeci_history = json.load(f)
+
+        # Zadrži postojeće izlazne direktorije ako novi nisu proslijeđeni
+        if not izlazni_dir_tekst and postojeci_history.get("izlazni_dir_tekst"):
+            izlazni_dir_tekst = postojeci_history["izlazni_dir_tekst"]
+        if not izlazni_dir_mp3 and postojeci_history.get("izlazni_dir_mp3"):
+            izlazni_dir_mp3 = postojeci_history["izlazni_dir_mp3"]
+
         history_data = {
             "mode_number": mode_number,
             "nacin_rada": nacin_rada,
             "odabrane_knjige": portabilne_knjige,
             "tts_book": tts_book,
-            "izlazni_dir": izlazni_dir,
+            "izlazni_dir_tekst": izlazni_dir_tekst,
+            "izlazni_dir_mp3": izlazni_dir_mp3,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         with open(HISTORY_DATOTEKA, "w", encoding="utf-8") as f:
@@ -717,6 +731,213 @@ def segmentiraj_poglavlja_po_odlomcima(tekst: str) -> list[dict[str, str]]:
 _TRENUTNA_PUTANJA_KNJIGE: str = ""
 _UCITANI_LIKOVI: dict[str, str] = {}
 
+# Globalna varijabla za history reuse direktorij (postavlja se kad se pritisne Y)
+_HISTORY_IZLAZNI_DIR_TEKST: str = ""
+_HISTORY_IZLAZNI_DIR_MP3: str = ""
+
+# Globalna varijabla za zahtjev prekida (X tipka tijekom prevođenja)
+_PREKID_ZAHTJEVAN: bool = False
+
+# Putanja do progress datoteke
+_PROGRESS_DATOTEKA = os.path.join(CONFIG["DIR"]["CACHE"], "progress.json")
+
+
+def atomic_write(putanja: str, sadrzaj: str) -> None:
+    """Sigurno pisanje datoteke koristeći temp+fsync+rename strategiju."""
+    tmp_putanja = putanja + ".tmp"
+    try:
+        with open(tmp_putanja, "w", encoding="utf-8") as f:
+            f.write(sadrzaj)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_putanja, putanja)
+    except Exception:
+        if os.path.exists(tmp_putanja):
+            try:
+                os.remove(tmp_putanja)
+            except Exception:
+                pass
+        raise
+
+
+def atomic_write_json(putanja: str, data: dict) -> None:
+    """Sigurno pisanje JSON datoteke koristeći atomic_write."""
+    sadrzaj = json.dumps(data, ensure_ascii=False, indent=2)
+    atomic_write(putanja, sadrzaj)
+
+
+def spremi_progress(book_idx: int, book_naziv: str, book_putanja: str,
+                    chapter_idx: int, chapter_naziv: str, ukupno_poglavlja: int,
+                    paragraph_idx: int, ukupno_paragrafa: int,
+                    sentence_idx: int, ukupno_recenica: int,
+                    mode: str, izlazni_dir_tekst: str, izlazni_dir_mp3: str,
+                    nacin_rada: str, status: str = "in_progress") -> None:
+    """Sprema napredak prevođenja u cache/progress.json."""
+    try:
+        base_dir = CONFIG["DIR"]["BASE"]
+        portabilna_putanja = book_putanja
+        if book_putanja.startswith(base_dir):
+            portabilna_putanja = book_putanja[len(base_dir):]
+
+        progress_data = {
+            "book_idx": book_idx, "book_naziv": book_naziv,
+            "book_putanja": portabilna_putanja,
+            "chapter_idx": chapter_idx, "chapter_naziv": chapter_naziv,
+            "ukupno_poglavlja": ukupno_poglavlja,
+            "paragraph_idx": paragraph_idx, "ukupno_paragrafa": ukupno_paragrafa,
+            "sentence_idx": sentence_idx, "ukupno_recenica": ukupno_recenica,
+            "mode": mode,
+            "izlazni_dir_tekst": izlazni_dir_tekst,
+            "izlazni_dir_mp3": izlazni_dir_mp3,
+            "nacin_rada": nacin_rada, "status": status,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        atomic_write_json(_PROGRESS_DATOTEKA, progress_data)
+    except Exception as e:
+        logging.warning(f"Nije moguće spremiti progress: {e}")
+
+
+def ucitaj_progress() -> Optional[dict]:
+    """Učitava napredak prevođenja iz cache/progress.json."""
+    if not os.path.exists(_PROGRESS_DATOTEKA):
+        return None
+    try:
+        with open(_PROGRESS_DATOTEKA, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        base_dir = CONFIG["DIR"]["BASE"]
+        if "book_putanja" in data and not os.path.isabs(data["book_putanja"]):
+            rel = data["book_putanja"].lstrip("\\/")
+            data["book_putanja"] = os.path.join(base_dir, rel)
+        return data
+    except Exception as e:
+        logging.warning(f"Nije moguće učitati progress: {e}")
+        return None
+
+
+def obrisi_progress() -> None:
+    """Briše progress datoteku nakon uspješnog završetka."""
+    if os.path.exists(_PROGRESS_DATOTEKA):
+        try:
+            os.remove(_PROGRESS_DATOTEKA)
+            logging.info("✅ Progress datoteka obrisana (posao završen)")
+        except Exception as e:
+            logging.warning(f"Nije moguće obrisati progress: {e}")
+
+
+def prikazi_progress_izvjestaj(progress: dict) -> bool:
+    """Prikazuje izvještaj o nedovršenom poslu i pita želi li korisnik nastaviti."""
+    ocisti_ekran()
+    print("=" * 60)
+    print("⚠️  DETEKCIJA NEDOVRŠENOG POSLA")
+    print("=" * 60)
+
+    book_naziv = progress.get("book_naziv", "Nepoznato")
+    book_putanja = progress.get("book_putanja", "")
+    chapter_idx = progress.get("chapter_idx", 0)
+    chapter_naziv = progress.get("chapter_naziv", "Nepoznato")
+    ukupno_poglavlja = progress.get("ukupno_poglavlja", 0)
+    paragraph_idx = progress.get("paragraph_idx", 0)
+    ukupno_paragrafa = progress.get("ukupno_paragrafa", 0)
+    status = progress.get("status", "unknown")
+    mode = progress.get("mode", "paragraph")
+    nacin_rada = progress.get("nacin_rada", "translate")
+
+    print(f"\n  Knjiga: {book_naziv}")
+    print(f"  Poglavlje: {chapter_idx + 1}/{ukupno_poglavlja} ({chapter_naziv})")
+
+    if ukupno_paragrafa > 0:
+        postotak = int((paragraph_idx / ukupno_paragrafa) * 100)
+        print(f"  Paragraf: {paragraph_idx + 1}/{ukupno_paragrafa} ({postotak}% završeno)")
+
+    if mode == "sentence" and progress.get("ukupno_recenica", 0) > 0:
+        sentence_idx = progress.get("sentence_idx", 0)
+        ukupno_recenica = progress.get("ukupno_recenica", 0)
+        print(f"  Rečenica: {sentence_idx + 1}/{ukupno_recenica}")
+
+    print(f"  Status: {status}")
+    print(f"  Način rada: {nacin_rada}")
+    print(f"  Mod prevođenja: {mode}")
+
+    greske: list[str] = []
+    if not os.path.exists(book_putanja):
+        greske.append(f"❌ Izvorna putanja knjige ne postoji: {book_putanja}")
+
+    izlazni_dir_tekst = progress.get("izlazni_dir_tekst", "")
+    if izlazni_dir_tekst:
+        puna_putanja = os.path.join(CONFIG["DIR"]["OUTPUT_TEXT"], izlazni_dir_tekst)
+        if not os.path.exists(puna_putanja):
+            greske.append(f"⚠️ Izlazni direktorij ne postoji: {izlazni_dir_tekst} (bit će kreiran)")
+
+    if greske:
+        print(f"\n  --- GREŠKE/UPOZORENJA ---")
+        for g in greske:
+            print(f"  {g}")
+
+    print(f"\n{'=' * 60}")
+    print("  R - Nastavi od zadnje točke (Resume)")
+    print("  N - Počni ispočetka (ignoriraj progress)")
+    print("  X - Izlaz iz aplikacije")
+    print(f"{'=' * 60}")
+
+    unos = input("\nVaš odabir (R/N/X): ").strip().upper()
+
+    if unos == 'R':
+        return True
+    elif unos == 'X':
+        print("\n[Dovidenja!]")
+        sys.exit(0)
+    else:
+        obrisi_progress()
+        return False
+
+
+def detektiraj_x_tipku() -> bool:
+    """Non-blocking detekcija X tipke za prekid prevođenja."""
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            if msvcrt.kbhit():
+                tipka = msvcrt.getch().decode('ascii', errors='ignore').upper()
+                return tipka == 'X'
+        else:
+            import select
+            if select.select([sys.stdin], [], [], 0)[0]:
+                tipka = sys.stdin.read(1).upper()
+                return tipka == 'X'
+    except Exception:
+        pass
+    return False
+
+
+def prikazi_prekid_meni() -> str:
+    """Prikazuje meni za prekid prevođenja kada je X detektirano."""
+    global _PREKID_ZAHTJEVAN
+    print("\n")
+    print("=" * 60)
+    print("⏸️  PREKID DETECTED - Odaberite opciju:")
+    print("=" * 60)
+    print("  1. Sačekaj kraj paragrafa/rečenice → spremi → izađi (preporučeno)")
+    print("  2. Prekini odmah → spremi što je do sada → izađi")
+    print("  3. Nastavi prevođenje (X je bio slučajan)")
+    print("  X. Prekini odmah bez spremanja (gubitak napretka!)")
+    print("=" * 60)
+
+    unos = input("Vaš odabir (1/2/3/X): ").strip().upper()
+
+    if unos == '1':
+        return "wait"
+    elif unos == '2':
+        return "cancel_api"
+    elif unos == '3':
+        _PREKID_ZAHTJEVAN = False
+        return "continue"
+    elif unos == 'X':
+        return "abort"
+    else:
+        _PREKID_ZAHTJEVAN = False
+        return "continue"
+
+
 def postavi_trenutnu_knjigu(putanja_knjige: str) -> None:
     """Postavlja globalnu putanju trenutne knjige i učitava likove memoriju.
     
@@ -924,7 +1145,9 @@ def prevedi_odlomak_lm_studio(odlomak: str) -> str:
         return odlomak
 
 
-def prevedi_tekst_paragrafski(tekst_eng: str) -> str:
+def prevedi_tekst_paragrafski(tekst_eng: str,
+                               progress_ctx: Optional[dict] = None,
+                               resume_from: int = 0) -> tuple[str, int, bool]:
     """Prevodi engleski tekst na hrvatski čuvajući strukturu odlomaka.
 
     Dijeli tekst na prave odlomke pomoću .split('\\n\\n'), šalje svaki
@@ -937,8 +1160,10 @@ def prevedi_tekst_paragrafski(tekst_eng: str) -> str:
         tekst_eng: Engleski tekst koji može sadržavati više odlomaka.
 
     Returns:
-        Prevedeni hrvatski tekst s očuvanom strukturom odlomaka.
+        tuple: (prevedeni_tekst, broj_prevedenih_odlomaka, je_prekinuto)
     """
+    global _PREKID_ZAHTJEVAN
+
     odlomci_raw = tekst_eng.split('\n\n')
     odlomci: list[str] = []
     for o in odlomci_raw:
@@ -947,17 +1172,67 @@ def prevedi_tekst_paragrafski(tekst_eng: str) -> str:
             odlomci.append(o_strip)
 
     if not odlomci:
-        return ""
+        return "", 0, False
 
     ukupno_rijeci = sum(len(o.split()) for o in odlomci)
-    akumulirane_rijeci = 0
+    akumulirane_rijeci = sum(len(o.split()) for o in odlomci[:resume_from])
 
     prevedeni_odlomci: list[str] = []
     ukupno = len(odlomci)
+    je_prekinuto = False
 
     for idx, odlomak in enumerate(odlomci):
+        if idx < resume_from:
+            continue
+
         rijeci_u_odlomku = len(odlomak.split())
         akumulirane_rijeci += rijeci_u_odlomku
+
+        # Spremi progress prije API poziva (status=in_progress)
+        if progress_ctx:
+            spremi_progress(
+                progress_ctx["book_idx"], progress_ctx["book_naziv"],
+                progress_ctx["book_putanja"],
+                progress_ctx["chapter_idx"], progress_ctx["chapter_naziv"],
+                progress_ctx["ukupno_poglavlja"],
+                idx, ukupno, 0, 0, "paragraph",
+                progress_ctx["izlazni_dir_tekst"], progress_ctx["izlazni_dir_mp3"],
+                progress_ctx["nacin_rada"], "in_progress"
+            )
+
+        # Detekcija X tipke prije API poziva
+        if detektiraj_x_tipku():
+            _PREKID_ZAHTJEVAN = True
+
+        if _PREKID_ZAHTJEVAN:
+            akcija = prikazi_prekid_meni()
+            if akcija == "wait":
+                try:
+                    prevedeni = prevedi_odlomak_lm_studio(odlomak)
+                    prevedeni_odlomci.append(prevedeni)
+                except Exception as e:
+                    logging.error(f"Greška pri prevođenju odlomka {idx + 1}/{ukupno}: {e}")
+                    prevedeni_odlomci.append(odlomak)
+                if progress_ctx:
+                    spremi_progress(
+                        progress_ctx["book_idx"], progress_ctx["book_naziv"],
+                        progress_ctx["book_putanja"],
+                        progress_ctx["chapter_idx"], progress_ctx["chapter_naziv"],
+                        progress_ctx["ukupno_poglavlja"],
+                        idx + 1, ukupno, 0, 0, "paragraph",
+                        progress_ctx["izlazni_dir_tekst"], progress_ctx["izlazni_dir_mp3"],
+                        progress_ctx["nacin_rada"], "completed"
+                    )
+                je_prekinuto = True
+                break
+            elif akcija == "cancel_api":
+                je_prekinuto = True
+                break
+            elif akcija == "abort":
+                obrisi_progress()
+                print("\n[PREKID] Posao prekinut bez spremanja napretka.")
+                sys.exit(0)
+            # "continue" - nastavi normalno
 
         try:
             prevedeni = prevedi_odlomak_lm_studio(odlomak)
@@ -965,6 +1240,18 @@ def prevedi_tekst_paragrafski(tekst_eng: str) -> str:
         except Exception as e:
             logging.error(f"Greška pri prevođenju odlomka {idx + 1}/{ukupno}: {e}")
             prevedeni_odlomci.append(odlomak)
+
+        # Spremi progress nakon API poziva (status=completed)
+        if progress_ctx:
+            spremi_progress(
+                progress_ctx["book_idx"], progress_ctx["book_naziv"],
+                progress_ctx["book_putanja"],
+                progress_ctx["chapter_idx"], progress_ctx["chapter_naziv"],
+                progress_ctx["ukupno_poglavlja"],
+                idx + 1, ukupno, 0, 0, "paragraph",
+                progress_ctx["izlazni_dir_tekst"], progress_ctx["izlazni_dir_mp3"],
+                progress_ctx["nacin_rada"], "completed"
+            )
 
         prikazi_progres(
             idx + 1,
@@ -979,7 +1266,8 @@ def prevedi_tekst_paragrafski(tekst_eng: str) -> str:
     # Završna unifikacija navodnika na cijelom tekstu
     konacni_tekst = unificiraj_navodnike(konacni_tekst)
 
-    return konacni_tekst
+    broj_prevedenih = resume_from + len(prevedeni_odlomci)
+    return konacni_tekst, broj_prevedenih, je_prekinuto
 
 
 # ==============================================================================
@@ -1083,7 +1371,10 @@ def prevedi_recenicu_lm_studio(recenica: str) -> str:
         return recenica
 
 
-def prevedi_tekst_recenica_po_recenicu(tekst_eng: str) -> str:
+def prevedi_tekst_recenica_po_recenicu(tekst_eng: str,
+                                        progress_ctx: Optional[dict] = None,
+                                        resume_od_idx: int = 0,
+                                        resume_rec_idx: int = 0) -> tuple[str, int, int, bool]:
     """Prevodi engleski tekst na hrvatski rečenicu po rečenicu.
 
     Dijeli tekst na rečenice pomoću regex split-a na granicama rečenica
@@ -1092,13 +1383,19 @@ def prevedi_tekst_recenica_po_recenicu(tekst_eng: str) -> str:
     Ovo sprječava attention drift i gramatičku degradaciju u dugim izlazima.
 
     Progress bar se ažurira nakon svake rečenice u stvarnom vremenu.
+    Podržava save/resume: sprema progress nakon svake rečenice i detektira X tipku.
 
     Args:
         tekst_eng: Engleski tekst koji može sadržavati više rečenica.
+        progress_ctx: Dictionary s podacima za progress tracking ili None.
+        resume_od_idx: Indeks odlomka od kojeg se nastavlja (0 = od početka).
+        resume_rec_idx: Indeks rečenice unutar odlomka od koje se nastavlja.
 
     Returns:
-        Prevedeni hrvatski tekst s očuvanom strukturom rečenica.
+        tuple: (prevedeni_tekst, broj_prevedenih_odlomaka, zadnja_recenica_idx, je_prekinuto)
     """
+    global _PREKID_ZAHTJEVAN
+
     # Prvo podijeli na odlomke da očuva strukturu paragrafa
     odlomci_raw = tekst_eng.split('\n\n')
     odlomci: list[str] = []
@@ -1108,14 +1405,21 @@ def prevedi_tekst_recenica_po_recenicu(tekst_eng: str) -> str:
             odlomci.append(o_strip)
 
     if not odlomci:
-        return ""
+        return "", 0, 0, False
 
     prevedeni_odlomci: list[str] = []
     ukupno_odlomaka = len(odlomci)
     ukupno_rijeci = sum(len(o.split()) for o in odlomci)
     akumulirane_rijeci = 0
+    je_prekinuto = False
+    zadnja_rec_idx = 0
 
     for od_idx, odlomak in enumerate(odlomci):
+        # Preskoči već prevedene odlomke pri resume-u
+        if od_idx < resume_od_idx:
+            akumulirane_rijeci += len(odlomak.split())
+            continue
+
         # Podijeli odlomak na rečenice koristeći regex
         recenice = re.split(r'(?<=[.!?])\s+', odlomak)
         recenice = [r.strip() for r in recenice if r.strip()]
@@ -1125,9 +1429,63 @@ def prevedi_tekst_recenica_po_recenicu(tekst_eng: str) -> str:
             continue
 
         prevedene_recenice: list[str] = []
+        start_rec_idx = resume_rec_idx if od_idx == resume_od_idx else 0
+
         for rec_idx, recenica in enumerate(recenice):
+            if rec_idx < start_rec_idx:
+                akumulirane_rijeci += len(recenica.split())
+                continue
+
             rijeci_u_recenici = len(recenica.split())
             akumulirane_rijeci += rijeci_u_recenici
+
+            # Spremi progress prije API poziva
+            if progress_ctx:
+                spremi_progress(
+                    progress_ctx["book_idx"], progress_ctx["book_naziv"],
+                    progress_ctx["book_putanja"],
+                    progress_ctx["chapter_idx"], progress_ctx["chapter_naziv"],
+                    progress_ctx["ukupno_poglavlja"],
+                    od_idx, ukupno_odlomaka, rec_idx, len(recenice), "sentence",
+                    progress_ctx["izlazni_dir_tekst"], progress_ctx["izlazni_dir_mp3"],
+                    progress_ctx["nacin_rada"], "in_progress"
+                )
+
+            # Detekcija X tipke
+            if detektiraj_x_tipku():
+                _PREKID_ZAHTJEVAN = True
+
+            if _PREKID_ZAHTJEVAN:
+                akcija = prikazi_prekid_meni()
+                if akcija == "wait":
+                    try:
+                        prevedena = prevedi_recenicu_lm_studio(recenica)
+                        prevedene_recenice.append(prevedena)
+                    except Exception as e:
+                        logging.error(f"Greška: {e}")
+                        prevedene_recenice.append(recenica)
+                    if progress_ctx:
+                        spremi_progress(
+                            progress_ctx["book_idx"], progress_ctx["book_naziv"],
+                            progress_ctx["book_putanja"],
+                            progress_ctx["chapter_idx"], progress_ctx["chapter_naziv"],
+                            progress_ctx["ukupno_poglavlja"],
+                            od_idx, ukupno_odlomaka, rec_idx + 1, len(recenice), "sentence",
+                            progress_ctx["izlazni_dir_tekst"], progress_ctx["izlazni_dir_mp3"],
+                            progress_ctx["nacin_rada"], "completed"
+                        )
+                    je_prekinuto = True
+                    zadnja_rec_idx = rec_idx + 1
+                    break
+                elif akcija == "cancel_api":
+                    je_prekinuto = True
+                    zadnja_rec_idx = rec_idx
+                    break
+                elif akcija == "abort":
+                    obrisi_progress()
+                    print("\n[PREKID] Posao prekinut bez spremanja.")
+                    sys.exit(0)
+                # "continue" - nastavi
 
             try:
                 prevedena = prevedi_recenicu_lm_studio(recenica)
@@ -1135,6 +1493,18 @@ def prevedi_tekst_recenica_po_recenicu(tekst_eng: str) -> str:
             except Exception as e:
                 logging.error(f"Greška pri prevođenju rečenice {rec_idx + 1}/{len(recenice)}: {e}")
                 prevedene_recenice.append(recenica)
+
+            # Spremi progress nakon API poziva
+            if progress_ctx:
+                spremi_progress(
+                    progress_ctx["book_idx"], progress_ctx["book_naziv"],
+                    progress_ctx["book_putanja"],
+                    progress_ctx["chapter_idx"], progress_ctx["chapter_naziv"],
+                    progress_ctx["ukupno_poglavlja"],
+                    od_idx, ukupno_odlomaka, rec_idx + 1, len(recenice), "sentence",
+                    progress_ctx["izlazni_dir_tekst"], progress_ctx["izlazni_dir_mp3"],
+                    progress_ctx["nacin_rada"], "completed"
+                )
 
             prikazi_progres(
                 od_idx + 1,
@@ -1146,13 +1516,16 @@ def prevedi_tekst_recenica_po_recenicu(tekst_eng: str) -> str:
         # Spoji prevedene rečenice natrag u odlomak
         prevedeni_odlomci.append(" ".join(prevedene_recenice))
 
+        if je_prekinuto:
+            break
+
     # Spajanje odlomaka s \n\n - očuvanje originalne strukture
     konacni_tekst = "\n\n".join(prevedeni_odlomci)
 
     # Završna unifikacija navodnika na cijelom tekstu
     konacni_tekst = unificiraj_navodnike(konacni_tekst)
 
-    return konacni_tekst
+    return konacni_tekst, od_idx + 1, zadnja_rec_idx, je_prekinuto
 
 
 # ==============================================================================
@@ -1487,11 +1860,17 @@ def interaktivni_izbornik() -> tuple[list[dict[str, str]], str, str]:
         if izbor == 'Y':
             history_data = ucitaj_povijest()
             if history_data and history_data.get("mode_number") and history_data.get("nacin_rada"):
+                global _HISTORY_IZLAZNI_DIR_TEKST, _HISTORY_IZLAZNI_DIR_MP3
                 mode_number = history_data["mode_number"]
                 nacin_rada = history_data["nacin_rada"]
                 odabrane_knjige = history_data.get("odabrane_knjige", [])
                 tts_book = history_data.get("tts_book", "")
+                # Postavi izlazne direktorije iz history za ponovno korištenje
+                _HISTORY_IZLAZNI_DIR_TEKST = history_data.get("izlazni_dir_tekst", "")
+                _HISTORY_IZLAZNI_DIR_MP3 = history_data.get("izlazni_dir_mp3", "")
                 print(f"\n[History] Ponavljam radnju: [{mode_number}] {opisi_nacin_rada(mode_number)}")
+                if _HISTORY_IZLAZNI_DIR_TEKST:
+                    print(f"[History] Koristim postojeći direktorij: {_HISTORY_IZLAZNI_DIR_TEKST}")
                 if nacin_rada == "tts_only":
                     return [], nacin_rada, tts_book
                 else:
@@ -1674,18 +2053,41 @@ def prikazi_jednostruki_izbor(opcije: list[str], naslov: str = "") -> Optional[s
 # ==============================================================================
 async def main() -> None:
     """Glavna async funkcija koja pokreće cijeli proces obrade knjiga."""
-    parser = argparse.ArgumentParser(description="MambaBookVoice CLI v1.0.6")
+    parser = argparse.ArgumentParser(description="MambaBookVoice CLI v1.0.7")
     parser.add_argument("--batch", action="store_true", help="Preskače izbornik i automatski obrađuje sve datoteke")
     parser.add_argument("--only-translate", action="store_true", help="Pokreće samo mod prevođenja")
     args = parser.parse_args()
 
-    if args.batch:
-        knjige = skeniraj_input_datoteke()
-        knjige_za_obradu = knjige
-        nacin_rada = "translate" if args.only_translate else "full"
-        odabrana_knjiga_tts = ""
+    # Provjeri postoji li nedovršeni posao (progress.json)
+    resume_data = None
+    if not args.batch:
+        progress = ucitaj_progress()
+        if progress:
+            nastavi = prikazi_progress_izvjestaj(progress)
+            if nastavi:
+                resume_data = progress
+
+    if args.batch or (resume_data is None):
+        if args.batch:
+            knjige = skeniraj_input_datoteke()
+            knjige_za_obradu = knjige
+            nacin_rada = "translate" if args.only_translate else "full"
+            odabrana_knjiga_tts = ""
+        else:
+            knjige_za_obradu, nacin_rada, odabrana_knjiga_tts = interaktivni_izbornik()
     else:
-        knjige_za_obradu, nacin_rada, odabrana_knjiga_tts = interaktivni_izbornik()
+        # Resume mod: učitaj podatke iz progress.json
+        knjige_za_obradu = [{
+            "putanja": resume_data["book_putanja"],
+            "naziv": resume_data["book_naziv"],
+            "je_preciscen": "true" if os.path.isdir(resume_data["book_putanja"]) else "false"
+        }]
+        nacin_rada = resume_data.get("nacin_rada", "translate")
+        odabrana_knjiga_tts = ""
+        # Postavi history direktorije za reuse
+        global _HISTORY_IZLAZNI_DIR_TEKST, _HISTORY_IZLAZNI_DIR_MP3
+        _HISTORY_IZLAZNI_DIR_TEKST = resume_data.get("izlazni_dir_tekst", "")
+        _HISTORY_IZLAZNI_DIR_MP3 = resume_data.get("izlazni_dir_mp3", "")
 
     # ===== NAČIN 3: TTS Only =====
     if nacin_rada == "tts_only" and odabrana_knjiga_tts:
@@ -1713,6 +2115,7 @@ async def main() -> None:
 
     # ===== NAČIN 1 (translate) i NAČIN 2 (full) =====
     ukupno_knjiga = len(knjige_za_obradu)
+    batch_prekinut = False
     for bk, knjiga in enumerate(knjige_za_obradu):
         putanja_knjige = knjiga["putanja"]
         naziv_knjige = knjiga["naziv"]
@@ -1786,17 +2189,69 @@ async def main() -> None:
         print(f"  - Ukupno riječi u knjizi: {ukupno_rijeci_knjige}")
         print(f"{'=' * 50}\n")
 
-        # Kreiranje izlaznih podmapa s inkrementalnim prefiksom
-        tekst_izlazna_mapa = os.path.join(CONFIG["DIR"]["OUTPUT_TEXT"], cisti_naziv_knjige)
-        tekst_izlazna_mapa = generiraj_sigurnu_mapu(tekst_izlazna_mapa)
-        mp3_izlazna_mapa = os.path.join(CONFIG["DIR"]["OUTPUT_MP3"], cisti_naziv_knjige)
-        mp3_izlazna_mapa = generiraj_sigurnu_mapu(mp3_izlazna_mapa)
-        os.makedirs(tekst_izlazna_mapa, exist_ok=True)
-        if not samo_prijevod:
+        # Kreiranje izlaznih podmapa
+        # Ako je pritisnut Y (history reuse) ili resume, koristi postojeći direktorij
+        if _HISTORY_IZLAZNI_DIR_TEKST:
+            tekst_izlazna_mapa = os.path.join(CONFIG["DIR"]["OUTPUT_TEXT"], _HISTORY_IZLAZNI_DIR_TEKST)
+            os.makedirs(tekst_izlazna_mapa, exist_ok=True)
+            print(f"  [HISTORY] Koristim postojeći direktorij: {_HISTORY_IZLAZNI_DIR_TEKST}")
+        else:
+            tekst_izlazna_mapa = os.path.join(CONFIG["DIR"]["OUTPUT_TEXT"], cisti_naziv_knjige)
+            tekst_izlazna_mapa = generiraj_sigurnu_mapu(tekst_izlazna_mapa)
+            os.makedirs(tekst_izlazna_mapa, exist_ok=True)
+            izlazni_dir_tekst_ime = os.path.basename(tekst_izlazna_mapa)
+            spremi_povijest(
+                "1" if nacin_rada == "translate" else "2",
+                knjige_za_obradu,
+                nacin_rada,
+                izlazni_dir_tekst=izlazni_dir_tekst_ime
+            )
+
+        if _HISTORY_IZLAZNI_DIR_MP3 and not samo_prijevod:
+            mp3_izlazna_mapa = os.path.join(CONFIG["DIR"]["OUTPUT_MP3"], _HISTORY_IZLAZNI_DIR_MP3)
             os.makedirs(mp3_izlazna_mapa, exist_ok=True)
+        elif not samo_prijevod:
+            mp3_izlazna_mapa = os.path.join(CONFIG["DIR"]["OUTPUT_MP3"], cisti_naziv_knjige)
+            mp3_izlazna_mapa = generiraj_sigurnu_mapu(mp3_izlazna_mapa)
+            os.makedirs(mp3_izlazna_mapa, exist_ok=True)
+            izlazni_dir_mp3_ime = os.path.basename(mp3_izlazna_mapa)
+            spremi_povijest(
+                "1" if nacin_rada == "translate" else "2",
+                knjige_za_obradu,
+                nacin_rada,
+                izlazni_dir_tekst=os.path.basename(tekst_izlazna_mapa),
+                izlazni_dir_mp3=izlazni_dir_mp3_ime
+            )
+
+        # Pripremi progress_ctx za praćenje napretka
+        izlazni_dir_tekst_ime = os.path.basename(tekst_izlazna_mapa)
+        izlazni_dir_mp3_ime = os.path.basename(mp3_izlazna_mapa) if not samo_prijevod else ""
+        progress_ctx = {
+            "book_idx": bk,
+            "book_naziv": naziv_knjige,
+            "book_putanja": putanja_knjige,
+            "ukupno_poglavlja": len(poglavlja),
+            "izlazni_dir_tekst": izlazni_dir_tekst_ime,
+            "izlazni_dir_mp3": izlazni_dir_mp3_ime,
+            "nacin_rada": nacin_rada,
+        }
+
+        # Odredi od koje poglavlja/rečenice se nastavlja (resume)
+        resume_chapter_idx = 0
+        resume_paragraph_idx = 0
+        resume_sentence_idx = 0
+        if resume_data and resume_data.get("book_idx") == bk:
+            resume_chapter_idx = resume_data.get("chapter_idx", 0)
+            resume_paragraph_idx = resume_data.get("paragraph_idx", 0)
+            resume_sentence_idx = resume_data.get("sentence_idx", 0)
 
         padding = CONFIG["SANITIZATION"]["PREFIX_PADDING"]
         for idx, poglavlje in enumerate(poglavlja):
+            # Preskoči već prevedena poglavlja pri resume-u
+            if idx < resume_chapter_idx:
+                print(f"\n[RESUME] Preskačem poglavlje {idx + 1}/{len(poglavlja)} (već prevedeno)")
+                continue
+
             redni_broj = str(idx + 1).zfill(padding)
             cisti_naslov_poglavlja = sanitiziraj_naziv(poglavlje["naslov"])
             if not cisti_naslov_poglavlja:
@@ -1808,10 +2263,36 @@ async def main() -> None:
                 f"{poglavlje['naslov']} ({rijeci_u_poglavlju} riječi)"
             )
 
+            # Ažuriraj progress_ctx s trenutnim poglavljem
+            progress_ctx["chapter_idx"] = idx
+            progress_ctx["chapter_naziv"] = poglavlje["naslov"]
+
+            je_prekid = False
             if CONFIG["TRANSLATION"].get("SENTENCE_BY_SENTENCE", True):
-                prevedeni_tekst = prevedi_tekst_recenica_po_recenicu(poglavlje["sadrzaj"])
+                # Resume u sentence modu: odredi start poziciju
+                start_od = 0
+                start_rec = 0
+                if idx == resume_chapter_idx and resume_data:
+                    start_od = resume_paragraph_idx
+                    start_rec = resume_sentence_idx
+
+                prevedeni_tekst, broj_odl, zadnja_rec, je_prekid = prevedi_tekst_recenica_po_recenicu(
+                    poglavlje["sadrzaj"],
+                    progress_ctx=progress_ctx,
+                    resume_od_idx=start_od,
+                    resume_rec_idx=start_rec
+                )
             else:
-                prevedeni_tekst = prevedi_tekst_paragrafski(poglavlje["sadrzaj"])
+                # Resume u paragraph modu
+                start_par = 0
+                if idx == resume_chapter_idx and resume_data:
+                    start_par = resume_paragraph_idx
+
+                prevedeni_tekst, broj_odl, je_prekid = prevedi_tekst_paragrafski(
+                    poglavlje["sadrzaj"],
+                    progress_ctx=progress_ctx,
+                    resume_from=start_par
+                )
 
             # Dodaj metadata header ako je uključeno u settings.py
             metadata_header = generiraj_metadata_header()
@@ -1833,6 +2314,23 @@ async def main() -> None:
                 print(f"  [TTS] Generiram MP3: {os.path.basename(putanja_mp3)}")
                 await generiraj_audio_poglavlje(prevedeni_tekst, putanja_mp3)
                 print(f"  [TTS OK] {os.path.basename(putanja_mp3)}")
+
+            # Ako je prekid detektiran, spremi progress i izađi
+            if je_prekid:
+                print(f"\n[PREKID] Spremanje napretka i izlazak...")
+                print(f"[PREKID] Progress spremljen. Pokrenite skriptu ponovno za nastavak.")
+                batch_prekinut = True
+                break
+
+        if batch_prekinut:
+            break
+
+        # Resetiraj resume_data nakon uspješne obrade knjige
+        resume_data = None
+
+    # Ako nije bilo prekida, obriši progress
+    if not batch_prekinut:
+        obrisi_progress()
 
     print("\n\n[ZAVRSENO] Sve izabrane knjige su uspješno obrađene!")
 

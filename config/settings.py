@@ -42,6 +42,11 @@ LITERARY AND STYLISTIC RULES:
 2. Participles and Adverbial Phrases: Translate English participles and lifestyle descriptions into natural Croatian adverbial or prepositional phrases. Ensure they maintain correct case agreement and logical flow relative to the subject.
 3. DYNAMIC GENDER CONSISTENCY: Carefully analyze the source text inside the tags to determine the grammatical gender of the speaker, narrator, or main character. Maintain this gender with absolute grammatical consistency from the very first sentence to the end of the text. Do not switch or mismatch grammatical genders mid-text.
 
+STRICT OPERATIONAL BOUNDARIES:
+- Translate ONLY the exact text provided inside the tags. 
+- Absolutely DO NOT write summaries, background history, commentary, or external stories based on your pre-training knowledge about the author or the book. 
+- Begin your response IMMEDIATELY with the direct translation of the first sentence of the source text.
+
 Output ONLY the translated literary text. Do not include the XML tags in your response, and do not provide any commentary or explanations.
 
 """,
