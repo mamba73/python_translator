@@ -188,8 +188,8 @@ def _load_dotenv() -> None:
         return
     env_path = _ROOT / ".env"
     if env_path.exists():
-        load_dotenv(dotenv_path=env_path)
-        logging.debug(".env učitan.")
+        load_dotenv(dotenv_path=env_path, override=True)
+        logging.debug(".env učitan (s override=True).")
 
 
 def _inject_api_keys(cfg: dict[str, Any]) -> dict[str, Any]:

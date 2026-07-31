@@ -27,7 +27,7 @@ directories:
 # -----------------------------------------------------------------------------
 api:
   # provider: "lm_studio"     # lm_studio | ollama_local | ollama_cloud | openai | gemini | qwen | custom
-  provider: "lm_studio"
+  provider: "gemini"
   auto_detect_model: true
   timeout: 120
 
@@ -48,7 +48,7 @@ api:
       key_env: "OPENAI_API_KEY"
     gemini:
       base_url: "https://generativelanguage.googleapis.com/v1beta"
-      model: "gemini-1.5-pro"
+      model: "gemini-2.0-flash"
       key_env: "GEMINI_API_KEY"
     qwen:
       base_url: "https://dashscope.aliyuncs.com/api/v1"

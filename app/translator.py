@@ -22,6 +22,7 @@ from app.utils import (
     prikazi_progres,
 )
 from app.checkpoint import CheckpointManager
+from app.logger import log_llm_response, log_verbatim
 
 
 class Translator:
@@ -197,6 +198,9 @@ class Translator:
         if system_prompt is None:
             system_prompt = self._generiraj_system_prompt()
 
+        # P1: Verbatim log originalnog teksta prije slanja
+        log_verbatim(tekst, "prevedi_segment - input")
+
         response = self._api_call(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -208,20 +212,28 @@ class Translator:
         response = unificiraj_navodnike(response)
         response = ocisti_leaked_prijevod(response)
 
+        # P1: Verbatim log prevedenog teksta
+        log_verbatim(response, "prevedi_segment - output")
+
         return response
 
     def prevedi_knjigu(self, tekst: str, output_path: str, book_id: str,
-                      granularnost: str = "paragraph") -> tuple[str, bool]:
+                      granularnost: str = "paragraph",
+                      resume_from: int = 0) -> tuple[str, bool]:
         """Produkcijski prijevod cijele knjige s checkpointingom i detaljnim progressom.
 
         Progress bar prikazuje broj riječi (akumulirano/ukupno + %) kao u
         mamba_voice.py. Koristi per-book memoriju iz `postavi_knjigu()`.
+
+        P2: Podržava nastavak od određenog segmenta (resume_from) za
+        checkpoint resume funkcionalnost.
 
         Args:
             tekst: Cijeli tekst knjige.
             output_path: Putanja za spremanje prevedenog teksta.
             book_id: Jedinstveni ID knjige za checkpointing.
             granularnost: Granularnost segmentacije (paragraph/sentence).
+            resume_from: Indeks segmenta od kojeg se nastavlja (0 = od početka).
 
         Returns:
             (prevedeni_tekst, je_prekinuto)
@@ -246,7 +258,24 @@ class Translator:
         je_prekinuto = False
         prevedeni: list[str] = []
 
+        # P2: Resume - učitaj postojeći prijevod i preskoči već prevedene segmente
+        if resume_from > 0 and os.path.exists(output_path):
+            try:
+                with open(output_path, 'r', encoding='utf-8') as f:
+                    postojeci_tekst = f.read()
+                postojeci_segmenti = postojeci_tekst.split('\n\n') if granularnost == "paragraph" else postojeci_tekst.split(' ')
+                postojeci_segmenti = [s.strip() for s in postojeci_segmenti if s.strip()]
+                prevedeni = postojeci_segmenti[:resume_from]
+                akumulirane_rijeci = sum(len(s.split()) for s in prevedeni)
+                logging.info(f"✅ Resume: učitano {len(prevedeni)} prevedenih segmenata, nastavljam od {resume_from}")
+            except Exception as e:
+                logging.warning(f"Greška pri učitavanju postojećeg prijevoda za resume: {e}")
+
         for idx, segment in enumerate(segmenti):
+            # P2: Preskoči već prevedene segmente pri resume-u
+            if idx < resume_from:
+                continue
+
             rijeci_u_segmentu = len(segment.split())
 
             # Detekcija prekida
@@ -433,17 +462,37 @@ class Translator:
         """Adapter za Google Gemini."""
         provider_cfg = self._api_cfg.get("providers", {}).get("gemini", {})
         base_url = provider_cfg.get("base_url", "https://generativelanguage.googleapis.com/v1beta")
-        model = provider_cfg.get("model", "gemini-1.5-pro")
+        model = provider_cfg.get("model", "gemini-2.0-flash")
         api_key = provider_cfg.get("api_key", "")
 
-        # Gemini koristi drugačiji format
-        payload = {
-            "contents": [{"parts": [{"text": msg["content"]} for msg in messages if msg["role"] == "user"]}],
+        # Gemini koristi specifičan contents format
+        # Injektiramo system instruction i user upite na pravilan način za Gemini
+        system_instruction = None
+        gemini_contents = []
+
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content", "").strip()
+            if not content:
+                continue
+
+            if role == "system":
+                system_instruction = {"parts": [{"text": content}]}
+            elif role == "user":
+                gemini_contents.append({"role": "user", "parts": [{"text": content}]})
+            elif role == "assistant":
+                gemini_contents.append({"role": "model", "parts": [{"text": content}]})
+
+        payload: dict[str, Any] = {
+            "contents": gemini_contents,
             "generationConfig": {
                 "temperature": self._trans_cfg.get("temperature", 0.25),
                 "maxOutputTokens": self._trans_cfg.get("max_tokens", 4000),
             }
         }
+
+        if system_instruction:
+            payload["systemInstruction"] = system_instruction
 
         headers = {"Content-Type": "application/json"}
         if api_key:
@@ -513,7 +562,19 @@ class Translator:
                 response_data = json.loads(response.read().decode('utf-8'))
                 # Standard OpenAI format
                 if "choices" in response_data:
-                    return response_data["choices"][0]["message"]["content"].strip()
+                    result = response_data["choices"][0]["message"]["content"].strip()
+                    # P1: Logiraj LLM razgovor (prompt + response)
+                    user_msg = ""
+                    for m in payload.get("messages", []):
+                        if m.get("role") == "user":
+                            user_msg = m.get("content", "")
+                            break
+                    log_llm_response(user_msg, result, {
+                        "provider": self._provider,
+                        "url": url,
+                        "model": payload.get("model", ""),
+                    })
+                    return result
                 # Fallback - vrati cijeli response
                 return str(response_data)
         except urllib.error.HTTPError as e:
@@ -545,8 +606,17 @@ class Translator:
         return "Ti si stručni prevoditelj s engleskog na hrvatski. Prevedi dani tekst točno i prirodno."
 
     def _generiraj_test_header(self, kolicina: int, granularnost: str) -> str:
-        """Generira header za testni prijevod."""
+        """Generira header za testni prijevod s detaljima aktivnog modela.
+
+        P3: Uključuje ime modela, parametre, quantization, context length
+        i sve dostupne detalje iz API-ja.
+        """
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # P3: Dohvati detalje modela iz API-ja
+        detalji = self.dohvati_detalje_modela()
+        model_name = detalji.get("model", "") or self.detektiraj_aktivni_model() or "Nepoznat"
+
         lines = [
             "=" * 80,
             f"TEST PRIJEVOD — Dynamic Book Translator v{self._cfg.get('project', {}).get('version', '0.4.0')}",
@@ -555,9 +625,47 @@ class Translator:
             f"Granularnost: {granularnost}",
             f"Količina: {kolicina} segmenata",
             f"Provider: {self._provider}",
-            "=" * 80,
-            ""
+            f"Model: {model_name}",
         ]
+
+        # Dodaj detalje modela ako su dostupni
+        parametri = detalji.get("parametri", "")
+        quantization = detalji.get("quantization", "")
+        context_length = detalji.get("context_length", "")
+        size = detalji.get("size", "")
+        owned_by = detalji.get("owned_by", "")
+
+        if parametri:
+            lines.append(f"Parametri: {parametri}")
+        if quantization:
+            lines.append(f"Quantization: {quantization}")
+        if context_length:
+            lines.append(f"Context length: {context_length}")
+        if size:
+            # Pretvori bytes u čitljiv format
+            try:
+                size_bytes = int(size)
+                if size_bytes >= 1024 * 1024 * 1024:
+                    size_str = f"{size_bytes / (1024**3):.1f} GB"
+                elif size_bytes >= 1024 * 1024:
+                    size_str = f"{size_bytes / (1024**2):.1f} MB"
+                else:
+                    size_str = f"{size_bytes / 1024:.1f} KB"
+                lines.append(f"Veličina modela: {size_str}")
+            except (ValueError, TypeError):
+                lines.append(f"Veličina modela: {size}")
+        if owned_by:
+            lines.append(f"Owned by: {owned_by}")
+
+        # Dodaj parametre prijevoda
+        lines.append("=" * 80)
+        lines.append(f"Temperature: {self._trans_cfg.get('temperature', 0.25)} | "
+                     f"Top-p: {self._trans_cfg.get('top_p', 0.80)} | "
+                     f"Top-k: {self._trans_cfg.get('top_k', 15)} | "
+                     f"Max tokens: {self._trans_cfg.get('max_tokens', 4000)}")
+        lines.append("=" * 80)
+        lines.append("")
+
         return '\n'.join(lines)
 
     def _prikazi_prekid_meni(self) -> str:
@@ -599,3 +707,109 @@ class Translator:
             logging.warning(f"Auto-detect nije uspio: {e}")
 
         return ""
+
+    # -----------------------------------------------------------------------
+    # Auto-detekcija modela (P3 - popravak regresije)
+    # -----------------------------------------------------------------------
+
+    def _detect_lm_studio_model(self) -> str:
+        """Detektira aktivni model iz LM Studio API-ja (GET /v1/models).
+
+        Ekvivalent detektiraj_aktivni_model() iz mamba_voice.py.
+
+        Returns:
+            Naziv modela ili prazan string.
+        """
+        provider_cfg = self._api_cfg.get("providers", {}).get("lm_studio", {})
+        base_url = provider_cfg.get("base_url", "http://127.0.0.1:1234/v1")
+        models_url = f"{base_url}/models"
+
+        try:
+            request = urllib.request.Request(models_url, method="GET")
+            with urllib.request.urlopen(request, timeout=5) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                if data.get("data") and len(data["data"]) > 0:
+                    model_id = data["data"][0]["id"]
+                    logging.info(f"✅ Auto-detektovan LM Studio model: {model_id}")
+                    return model_id
+        except Exception as e:
+            logging.warning(f"LM Studio auto-detect nije uspio: {e}")
+        return ""
+
+    def _detect_ollama_model(self) -> str:
+        """Detektira aktivni model iz lokalnog Ollama API-ja (GET /api/tags).
+
+        Returns:
+            Naziv modela ili prazan string.
+        """
+        provider_cfg = self._api_cfg.get("providers", {}).get("ollama_local", {})
+        base_url = provider_cfg.get("base_url", "http://127.0.0.1:11434/api")
+        tags_url = f"{base_url}/tags"
+
+        try:
+            request = urllib.request.Request(tags_url, method="GET")
+            with urllib.request.urlopen(request, timeout=5) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                if data.get("models") and len(data["models"]) > 0:
+                    model_name = data["models"][0]["name"]
+                    logging.info(f"✅ Auto-detektovan Ollama model: {model_name}")
+                    return model_name
+        except Exception as e:
+            logging.warning(f"Ollama auto-detect nije uspio: {e}")
+        return ""
+
+    def dohvati_detalje_modela(self) -> dict[str, Any]:
+        """Dohvaća detalje o aktivnom modelu iz API-ja.
+
+        Za LM Studio: GET /v1/models vraća listu s id, object, owned_by, itd.
+        Za Ollama: GET /api/tags vraća listu s name, size, details (parametri, quantization).
+
+        Returns:
+            Rječnik s detaljima modela (model, provider, parametri, quantization, size, ...).
+        """
+        detalji: dict[str, Any] = {
+            "model": "",
+            "provider": self._provider,
+            "parametri": "",
+            "quantization": "",
+            "size": "",
+            "context_length": "",
+            "raw": None,
+        }
+
+        try:
+            if self._provider == "lm_studio":
+                provider_cfg = self._api_cfg.get("providers", {}).get("lm_studio", {})
+                base_url = provider_cfg.get("base_url", "http://127.0.0.1:1234/v1")
+                models_url = f"{base_url}/models"
+                request = urllib.request.Request(models_url, method="GET")
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+                    if data.get("data") and len(data["data"]) > 0:
+                        model_info = data["data"][0]
+                        detalji["model"] = model_info.get("id", "")
+                        detalji["raw"] = model_info
+                        # LM Studio može vratiti dodatne metapodatke
+                        detalji["context_length"] = model_info.get("context_length", "")
+                        detalji["owned_by"] = model_info.get("owned_by", "")
+            elif self._provider == "ollama_local":
+                provider_cfg = self._api_cfg.get("providers", {}).get("ollama_local", {})
+                base_url = provider_cfg.get("base_url", "http://127.0.0.1:11434/api")
+                tags_url = f"{base_url}/tags"
+                request = urllib.request.Request(tags_url, method="GET")
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+                    if data.get("models") and len(data["models"]) > 0:
+                        model_info = data["models"][0]
+                        detalji["model"] = model_info.get("name", "")
+                        detalji["raw"] = model_info
+                        # Ollama details sekcija
+                        details = model_info.get("details", {})
+                        detalji["parametri"] = details.get("parameter_size", "")
+                        detalji["quantization"] = details.get("quantization_level", "")
+                        detalji["size"] = model_info.get("size", "")
+                        detalji["context_length"] = details.get("context_length", "")
+        except Exception as e:
+            logging.warning(f"Dohvat detalja modela nije uspio: {e}")
+
+        return detalji

@@ -306,6 +306,9 @@ class Menu:
                 self.show_phase3()
             elif odabir == "4":
                 self.show_phase4()
+            elif odabir and odabir.startswith("resume:"):
+                # P2: Checkpoint resume - nastavi prijevod od zadnje točke
+                self._nastavi_prijevod(odabir)
 
     # -----------------------------------------------------------------------
     # Glavni izbornik
@@ -1120,6 +1123,93 @@ class Menu:
 
         except Exception as e:
             print(f"Greška pri BRZOM TESTU: {e}")
+
+        ack = self._safe_input("\nPritisnite Enter za povratak...")
+
+    def _nastavi_prijevod(self, odabir: str) -> None:
+        """P2: Nastavlja prijevod od checkpointa.
+
+        Args:
+            odabir: String u formatu "resume:<index>" gdje je index
+                indeks checkpointa u listi.
+        """
+        try:
+            idx_str = odabir.split(":")[1]
+            idx = int(idx_str)
+        except (IndexError, ValueError):
+            print(f"Greška: nevažeći resume odabir: {odabir}")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
+        checkpointi = self._cp.ucitaj_checkpointe()
+        if idx < 0 or idx >= len(checkpointi):
+            print(f"Greška: nevažeći indeks checkpointa: {idx}")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
+        cp = checkpointi[idx]
+        book_id = cp.get("book_id", "")
+        book_title = cp.get("book_title", "Nepoznato")
+        current_segment = cp.get("current_segment", 0)
+        total_segments = cp.get("total_segments", 0)
+        output_path = cp.get("output_path", "")
+
+        print(f"\nNastavak prijevoda: {book_title}")
+        print(f"Checkpoint: {current_segment}/{total_segments} segmenata")
+        print()
+
+        # Pronađi direktorij knjige i [fixed] datoteku
+        output_dir = Path(self._cfg["directories"]["output"])
+        knjiga_dir = output_dir / book_title
+
+        if not knjiga_dir.exists() or not knjiga_dir.is_dir():
+            print(f"Direktorij {knjiga_dir} ne postoji.")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
+        # Traži [fixed] datoteku
+        fixed_datoteke = list(knjiga_dir.glob("*[fixed]*.txt"))
+        if not fixed_datoteke:
+            txt_datoteke = list(knjiga_dir.glob("*.txt"))
+            if not txt_datoteke:
+                print(f"Nema .txt datoteka u {knjiga_dir.name}")
+                ack = self._safe_input("Pritisnite Enter za povratak...")
+                return
+            txt_datoteka = txt_datoteke[0]
+        else:
+            txt_datoteka = fixed_datoteke[0]
+
+        try:
+            # Učitaj tekst
+            with open(txt_datoteka, 'r', encoding='utf-8') as f:
+                tekst = f.read()
+
+            # Učitaj book config ako postoji
+            config_putanja = knjiga_dir / "config.yaml"
+            book_config = None
+            if config_putanja.exists():
+                with open(config_putanja, 'r', encoding='utf-8') as f:
+                    book_config = yaml.safe_load(f)
+
+            # Postavi knjigu i učitaj memoriju
+            self._translator.postavi_knjigu(str(knjiga_dir), book_config)
+
+            # Nastavi prijevod od current_segment
+            prijevod, je_prekinuto = self._translator.prevedi_knjigu(
+                tekst,
+                output_path=output_path,
+                book_id=book_id,
+                granularnost=self._opcije["granularnost"],
+                resume_from=current_segment
+            )
+
+            if je_prekinuto:
+                print(f"Prijevod prekinut - napredak spremljen u checkpoint.")
+            else:
+                print(f"Prijevod završen: {output_path}")
+
+        except Exception as e:
+            print(f"Greška pri nastavku prijevoda: {e}")
 
         ack = self._safe_input("\nPritisnite Enter za povratak...")
 
