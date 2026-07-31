@@ -1,11 +1,11 @@
 # TEHNIČKA DOKUMENTACIJA SUSTAVA — KOMPLETNA SPECIFIKACIJA
 
-## DYNAMIC BOOK TRANSLATOR & PARSER — V0.3
-**Datum:** 30. srpnja 2026.  
+## DYNAMIC BOOK TRANSLATOR & PARSER — V0.4
+**Datum:** 31. srpnja 2026.  
 **Autor:** mamba  
 **Platforma:** Windows + Git Bash (MSYS2/MinGW)  
 **Jezik:** Python 3.10+  
-**Status:** Produkcijska specifikacija
+**Status:** Produkcijska specifikacija — Refactoring release
 
 ---
 
@@ -23,14 +23,17 @@
 10. [Faza 4 — TTS sinteza u MP3 po paragrafima](#10-faza-4--tts-sinteza-u-mp3-po-paragrafima)
 11. [Batch processing mehanizam](#11-batch-processing-mehanizam)
 12. [Multi-checkpoint sustav perzistencije](#12-multi-checkpoint-sustav-perzistencije)
-13. [1-Click test sustav](#13-1-click-test-sustav)
-14. [Trorazinsko logiranje](#14-troazinsko-logiranje)
+13. [TEST sustav — brzi testni prijevod](#13-test-sustav--brzi-testni-prijevod)
+14. [Trorazinsko logiranje](#14-trorazinsko-logiranje)
 15. [Vanjski API integracija](#15-vanjski-api-integracija)
 16. [Automatska detekcija likova — analiza izvedivosti](#16-automatska-detekcija-likova)
 17. [.gitignore specifikacija](#17-gitignore-specifikacija)
 18. [Sigurnosno rukovanje greškama](#18-sigurnosno-rukovanje-greškama)
 19. [Protokol sigurnog izlaza](#19-protokol-sigurnog-izlaza)
 20. [Header metapodaci u prevedenom tekstu](#20-header-metapodaci-u-prevedenom-tekstu)
+21. [Refactoring — modularna arhitektura](#21-refactoring--modularna-arhitektura)
+22. [Upravljanje direktorijima i datotekama — unificirana metoda](#22-upravljanje-direktorijima-i-datotekama--unificirana-metoda)
+23. [MP3 imenovanje i metapodaci](#23-mp3-imenovanje-i-metapodaci)
 
 ---
 
@@ -39,19 +42,21 @@
 Sustav je četverofazni CLI alat namijenjen automatiziranoj pripremi, prijevodu i audio-sintezi knjiga različitih žanrova (književna SF literatura, stručna IT literatura, općenito). Ključne karakteristike:
 
 - **Bootstrap provjera okruženja** pri svakom pokretanju putem `./start` datoteke.
-- **Unificirana `X` navigacija** kroz sve razine izbornika.
+- **Unificirana `X` navigacija** kroz sve razine izbornika s kretanjem kursorskim tipkama.
 - **Per-book direktoriji** — svaka knjiga ima vlastiti direktorij s izoliranom konfiguracijom i memorijom.
-- **YAML konfiguracija** — multi-line system prompt s jednostavnim copy/paste i komentarima.
-- **Čista struktura** — svi radni direktoriji unutar `work/`, root sadrži samo kod.
-- **Memorija vezana za obrađeni tekst** — JSON s likovima/glosarom kreira se uz [fixed] datoteku.
+- **YAML konfiguracija** — sva vanjska konfiguracija isključivo u YAML formatima.
+- **Čista modularna struktura** — `app/` direktorij s odvojenim modulima, `main.py` kao orkestracija.
+- **Memorija vezana za obrađeni tekst** — JSON s likovima/glosarom kreira se uz `[fixed]` datoteku.
 - **Batch processing** — višestruki odabir datoteka u svakoj fazi.
-- **MP3 po paragrafima** — audio knjiga se razdvaja po paragrafima u direktoriju knjige.
+- **MP3 po paragrafima** — imenovanje `001_Ch01_part001.mp3` s embedded ID3 metapodacima.
 - **Multi-checkpoint perzistencija** — do 6+ paralelnih naslova s neovisnim postotkom napretka.
-- **1-Click test sustav** — pamti zadnje testne parametre za brzo ponavljanje.
+- **TEST sustav** — brzi testni prijevod za odlomak / paragraf / rečenicu, s opcionalnim headerom (uključen/isključen u OPCIJAMA).
 - **Trorazinsko logiranje** — osnovno, verbatim i LLM response debug.
-- **Vanjski API integracija** — podrška za LM Studio, OpenAI, Gemini, Qwen.
+- **Vanjski API integracija** — lokalni LM Studio, lokalni Ollama, Ollama cloud, OpenAI, Gemini, Qwen i ostali; API ključevi u `.env` datoteci.
+- **`.env` zaštita** — API ključevi nikada nisu u kodu ni YAML-u, čitaju se isključivo iz `.env` (u `.gitignore`).
 - **Dvostruka potvrda izlaza** radi zaštite od slučajnog prekida.
 - **Fallback mehanizam** pri `HTTP 500` ili `Timeout` greškama lokalnog LLM-a.
+- **Unificirana metoda za rad s direktorijima** — jedna metoda za kreiranje, detekciju i suffix-increment.
 
 ---
 
@@ -86,7 +91,11 @@ edge-tts>=6.1.9
 colorama>=0.4.6
 tqdm>=4.66.0
 pyyaml>=6.0.1
+mutagen>=1.47.0
+python-dotenv>=1.0.0
 ```
+
+> **Napomena:** `mutagen` za ID3 metapodatke u MP3; `python-dotenv` za čitanje `.env` datoteke s API ključevima.
 
 ---
 
@@ -94,12 +103,7 @@ pyyaml>=6.0.1
 
 ### 3.1 Princip organizacije
 
-Root direktorij projekta sadrži **isključivo kod i globalnu konfiguraciju**. Svi radni direktoriji (ulaz, izlaz, prijevodi, audio, logovi, state) smješteni su unutar `work/` direktorija kako bi:
-
-- Root projekta bio čist i pregledan.
-- `.gitignore` bio jednostavan (samo ignorirati `work/`).
-- Backup i migracija bili lakši (kopirati samo `work/`).
-- Struktura bila jasno odvojena: kod vs. podaci.
+Root direktorij projekta sadrži **isključivo kod i globalnu konfiguraciju**. Svi radni direktoriji smješteni su unutar `work/` direktorija. Python moduli su isključivo unutar `app/` direktorija.
 
 ### 3.2 Kompletna struktura
 
@@ -107,97 +111,59 @@ Root direktorij projekta sadrži **isključivo kod i globalnu konfiguraciju**. S
 project_root/
 │
 ├── ./start                          # Bash bootstrap skripta (ulazna točka)
-├── main.py                          # Glavna Python skripta (CLI + orkestracija)
+├── main.py                          # Glavna Python skripta (orkestracija, poziva app/ module)
 ├── requirements.txt                 # Lista pip paketa
-├── .gitignore                       # Git ignore pravila
+├── .gitignore
+│
+├── app/                             # SVI Python moduli (refactoring)
+│   ├── config_loader.py             # Učitavanje i spajanje YAML konfiguracije
+│   ├── menu.py                      # CLI izbornici s kursorskom navigacijom
+│   ├── document_processor.py        # Faza 1: konverzija dokumenata
+│   ├── text_cleaner.py              # Faza 2: čišćenje [fixed] + kreiranje memorije
+│   ├── translator.py                # Faza 3: LLM prevođenje (odlomak/paragraf/rečenica)
+│   ├── tts_engine.py                # Faza 4: TTS sinteza u MP3
+│   ├── file_manager.py              # Unificirana metoda za direktorije i datoteke
+│   ├── checkpoint.py                # Multi-checkpoint perzistencija
+│   ├── logger.py                    # Trorazinsko logiranje
+│   └── utils.py                     # Zajedničke pomoćne funkcije
 │
 ├── config/                          # Globalni konfiguracijski profili (YAML)
+│   ├── settings.yaml                # Globalne postavke (API, TTS, direktoriji, logiranje)
 │   ├── profile_sf_literature.yaml
 │   ├── profile_it_technical.yaml
 │   └── profile_general.yaml
 │
 └── work/                            # Svi radni direktoriji
-    │
-    ├── input/                       # Ulazni direktorij (samo sirovi dokumenti)
-    │   ├── Dune.epub
-    │   ├── Clean_Code.pdf
-    │   └── ...
-    │
-    ├── output/                      # Međufaza (TXT/MD + [fixed] + konfiguracija + memorija)
-    │   ├── Dune/                    # Direktorij po knjizi
-    │   │   ├── Dune.txt             # Sirova konverzija
-    │   │   ├── Dune [fixed].txt     # Očišćena verzija (spremna za prijevod)
-    │   │   ├── config.yaml          # Per-book konfiguracija (YAML)
-    │   │   └── Dune_memorija.json   # Likovi, glosar, gramatika (auto-kreiran pri [fixed])
-    │   │
-    │   └── Clean_Code/
-    │       ├── Clean_Code.md
-    │       ├── Clean_Code [fixed].md
+    ├── input/
+    ├── output/
+    │   └── Dune/
+    │       ├── Dune.txt
+    │       ├── Dune [fixed].txt
     │       ├── config.yaml
-    │       └── Clean_Code_memorija.json
-    │
-    ├── translated/                  # Konačni prijevodi (bez [fixed] sufiksa)
-    │   ├── Dune/
-    │   │   └── Dune.txt             # Konačni prijevod s header metapodacima
-    │   └── Clean_Code/
-    │       └── Clean_Code.md
-    │
-    ├── audiobooks/                  # Finalni MP3 izlazi PO PARAGRAFIMA
-    │   ├── Dune/                    # Direktorij po knjizi
-    │   │   ├── 001.mp3              # Prvi paragraf
-    │   │   ├── 002.mp3              # Drugi paragraf
-    │   │   ├── 003.mp3
-    │   │   └── ...
-    │   └── Clean_Code/
-    │       ├── 001.mp3
+    │       └── Dune_memorija.json
+    ├── translated/
+    │   └── Dune/
+    │       ├── Dune.txt                              # Produkcijski prijevod — ČISTI TEKST, bez headera (spreman za TTS→MP3)
+    │       └── Dune_test_2026-07-31_110820.txt       # Testni prijevod — s opcionalnim headerom (uklj/isklj u OPCIJAMA)
+    ├── audiobooks/
+    │   └── Dune/
+    │       ├── 001_Ch01_part001.mp3
+    │       ├── 002_Ch02_part001.mp3
     │       └── ...
-    │
-    ├── state/                       # Perzistencija checkpointa
+    ├── state/
     │   ├── translation_checkpoints.json
-    │   └── last_test.json           # Zadnji testni parametri
-    │
-    └── logs/                        # Log datoteke po datumu
-        ├── 2026-07-30_142211_dynamic_book_translator_v4.3.0_debug.log
-        ├── 2026-07-30_142211_dynamic_book_translator_v4.3.0_verbatim.log
-        └── llm_responses/           # LLM odgovori po knjizi
-            ├── Dune/
-            │   ├── chunk_001.json
-            │   └── ...
-            └── Clean_Code/
-                └── ...
+    │   └── last_test.json
+    └── logs/
+        ├── 2026-07-31_110000_dynamic_book_translator_v0.4_debug.log
+        └── llm_responses/
 ```
 
-### 3.3 Ključna promjena: Memorija vezana za obrađeni tekst
+### 3.3 Ključna pravila strukture
 
-**ZAŠTO memorija NIJE u `input/`:**
-- `input/` sadrži **samo sirove dokumente** (epub, pdf, docx) koji se još nisu obrađivali.
-- Memorija (likovi, glosar, gramatika) odnosi se na **obrađeni i očišćeni tekst** koji se šalje na prijevod.
-- Memorija je kontekstualno vezana za `[fixed]` datoteku — ne za sirovi input.
-- Sve vezano za jednu knjigu (konverzija, čišćenje, konfiguracija, memorija) mora biti na **jednom mjestu** — u `work/output/<Knjiga>/`.
-
-**KADA se kreira memorija:**
-- Memorija se **automatski kreira s placeholderima** prilikom Faze 2 (čišćenje tehničkog šuma).
-- Kada skripta generira `Dune [fixed].txt`, istovremeno kreira `Dune_memorija.json` s praznom strukturom.
-- Korisnik može ručno popuniti memoriju prije pokretanja Faze 3 (prevođenje).
-
-### 3.4 Automatsko kreiranje direktorija
-
-Pri prvom pokretanju skripta automatski kreira sve potrebne direktorije:
-
-```python
-DIRECTORIES = [
-    "work/input",
-    "work/output",
-    "work/translated",
-    "work/audiobooks",
-    "work/state",
-    "work/logs",
-    "config"
-]
-
-for dir_path in DIRECTORIES:
-    os.makedirs(dir_path, exist_ok=True)
-```
+- `app/` — isključivo Python moduli, nema konfiga ni podataka.
+- `config/` — isključivo YAML datoteke; nema hardkodiranih vrijednosti u kodu.
+- `work/` — svi radni podaci, potpuno ignoriran u `.gitignore`.
+- `main.py` — jedina ulazna točka koja importa module iz `app/`.
 
 ---
 
@@ -219,107 +185,93 @@ Skripta koristi `comm -23` za skupovnu razliku:
 - **Desni skup:** instalirani paketi iz `pip freeze`.
 - **Rezultat:** samo nedostajući paketi → instaliraju se tiho (`--quiet`).
 
-Ovaj mehanizam osigurava da se **svaki puta pri pokretanju** provjeri integritet okruženja, bez ponovne instalacije već prisutnih paketa.
-
 ---
 
-## 5. KONFIGURACIJSKI SUSTAV — YAML FORMAT I PER-BOOK DIREKTORJI
+## 5. KONFIGURACIJSKI SUSTAV — YAML FORMAT
 
-### 5.1 Globalna konfiguracija u `main.py`
+### 5.1 Princip
 
-Svi globalni parametri definirani su na vrhu skripte u jasno označenom bloku:
+**Sva konfiguracija je isključivo u YAML datotekama.** Nema hardkodiranih vrijednosti u Python kodu. Konfiguracija se dijeli na:
 
-```python
-# ============================================================
-# KONFIGURACIJA I VARIJABLE
-# ============================================================
+- **`config/settings.yaml`** — globalne postavke (API, TTS, direktoriji, logiranje, sanitizacija).
+- **`config/profile_*.yaml`** — predlošci za žanrove (SF, IT, general).
+- **`work/output/<Knjiga>/config.yaml`** — per-book konfiguracija generirana iz predloška.
 
-SCRIPT_NAME = "Dynamic Book Translator"
-SCRIPT_VERSION = "4.3.0"
-
-# --- Boje za CLI ---
-CLR_YELLOW = "\033[93m"
-CLR_GREEN = "\033[92m"
-CLR_RED = "\033[91m"
-CLR_BLUE = "\033[94m"
-CLR_CYAN = "\033[96m"
-CLR_RESET = "\033[0m"
-
-# --- Direktoriji ---
-WORK_DIR = "./work"
-INPUT_DIR = f"{WORK_DIR}/input"
-OUTPUT_DIR = f"{WORK_DIR}/output"
-TRANSLATED_DIR = f"{WORK_DIR}/translated"
-AUDIOBOOKS_DIR = f"{WORK_DIR}/audiobooks"
-STATE_DIR = f"{WORK_DIR}/state"
-LOGS_DIR = f"{WORK_DIR}/logs"
-CONFIG_DIR = "./config"
-
-# --- API konfiguracija ---
-API_PROVIDER = "lm_studio"  # Opcije: "lm_studio", "openai", "gemini", "qwen"
-API_BASE_URL = "http://127.0.0.1:1234/v1"
-API_KEY = ""  # Prazno za lokalni LM Studio, obavezno za cloud API-je
-DEFAULT_MODEL = "local-model"
-
-# --- Logiranje ---
-LOG_VERBATIM = False       # Detaljni trace svake akcije (default: OFF)
-LOG_LLM_RESPONSES = False  # Snimanje punih LLM odgovora (default: OFF)
-ENABLE_REASONING = False   # Dozvoli reasoning/thinking u outputu (default: OFF)
-
-# --- TTS konfiguracija ---
-TTS_ENGINE = "edge-tts"
-TTS_VOICE = "hr-HR-GabrijelaNeural"
-TTS_RATE = "+0%"
-TTS_VOLUME = "+0%"
-```
-
-### 5.2 Per-book konfiguracija — YAML format
-
-Svaka knjiga ima vlastiti `config.yaml` unutar svog direktorija u `work/output/`. YAML format omogućuje:
-
-- **Multi-line stringove** s `|` (literal block) — savršen za system prompt.
-- **Komentare** s `#` — dokumentacija unutar konfiguracije.
-- **Čitljivost** bolju od JSON-a.
-- **Copy/paste friendly** — nema escape karaktera.
-- **Strukturiranost** — jasna hijerarhija podataka.
-
-### 5.3 Struktura `work/output/Dune/config.yaml`
+### 5.2 Globalne postavke — `config/settings.yaml`
 
 ```yaml
 # ============================================================
-# KONFIGURACIJA KNJIGE: Dune
+# GLOBALNE POSTAVKE
 # ============================================================
 
-# --- Osnovni podaci ---
+project:
+  name: "Dynamic Book Translator"
+  version: "0.4.0"
+
+directories:
+  work: "./work"
+  input: "./work/input"
+  output: "./work/output"
+  translated: "./work/translated"
+  audiobooks: "./work/audiobooks"
+  state: "./work/state"
+  logs: "./work/logs"
+  config: "./config"
+
+api:
+  provider: "lm_studio"       # lm_studio | openai | gemini | qwen
+  base_url: "http://127.0.0.1:1234/v1"
+  key: ""
+  model: ""                   # prazno = auto-detect
+  auto_detect_model: true
+  timeout: 120
+
+logging:
+  verbatim: false
+  llm_responses: false
+  enable_reasoning: false
+
+tts:
+  engine: "edge-tts"
+  narrator:
+    voice: "hr-HR-SreckoNeural"
+    rate: "+0%"
+    pitch: "+0Hz"
+  dialog:
+    use_different_voice: true
+    voice: "hr-HR-GabrijelaNeural"
+    rate: "+2%"
+    pitch: "+0Hz"
+  dramatic_mode:
+    enabled: true
+    keywords_anxious: ["run", "explosion", "danger", "dead", "weapon", "fast", "shot", "kill"]
+    rate_modifier_anxious: "+15%"
+
+sanitization:
+  replace_spaces_with: "-"
+  prefix_padding: 3
+
+chapter_patterns:
+  - "^(CHAPTER|Chapter|POGLAVLJE|Poglavlje)\\s+\\d+"
+  - "^(EPILOGUE|PROLOGUE|Epilogue|Prologue)"
+  - "^[A-Z\\s]{4,25}$"
+```
+
+### 5.3 Per-book konfiguracija — `work/output/Dune/config.yaml`
+
+```yaml
 book_title: "Dune"
 author: "Frank Herbert"
 original_file: "Dune.epub"
 
-# --- API konfiguracija (override globalnih postavki) ---
-api_provider: "lm_studio"  # Opcije: "lm_studio", "openai", "gemini", "qwen"
+api_provider: "lm_studio"
 model: "local-model"
-api_key_override: ""  # Prazno = koristi globalni API_KEY
+api_key_override: ""
 
-# --- System prompt (multi-line, copy/paste friendly) ---
 system_prompt: |
   Ti si stručni prevoditelj s engleskog na hrvatski za žanr znanstvene fantastike.
-  Zadrži literarni stil, emociju i ritam rečenica.
-  Koristi bogat rječnik, ali izbjegavaj arhaizme i posuđenice iz srpskog/bosanskog.
-  Koristi isključivo standardni hrvatski jezik.
-  Poštuj rod likova prema uputama iz JSON memorije.
-  Ako naiđeš na tehnički termin koji nema etablirani hrvatski ekvivalent, ostavi ga na engleskom.
-  
-  STIL:
-  - Koristi kratke, udarne rečenice za akciju.
-  - Koristi duže, tečne rečenice za opise i introspekciju.
-  - Izbjegavaj pasivne konstrukcije gdje je moguće.
-  
-  TON:
-  - Misteriozan i napet.
-  - Filozofski gdje je prikladno.
-  - Nikada kolokvijalan ili moderan.
+  ...
 
-# --- Parametri modela ---
 parameters:
   temperature: 0.25
   top_p: 0.80
@@ -328,97 +280,95 @@ parameters:
   max_tokens: 4096
   repeat_penalty: 1.1
 
-# --- Chunking konfiguracija ---
 chunking:
   max_tokens_per_chunk: 1500
   overlap_tokens: 100
 
-# --- JSON memorija (likovi, glosar, gramatika) ---
 memorija_file: "Dune_memorija.json"
+enable_reasoning: false
 
-# --- Reasoning toggle ---
-enable_reasoning: false  # false = čisti  <think> i  tagove iz outputa
-
-# --- Metadata ---
-created_at: "2026-07-30T14:22:11"
-updated_at: "2026-07-30T14:22:11"
+created_at: "2026-07-31T11:00:00"
+updated_at: "2026-07-31T11:00:00"
 ```
 
 ### 5.4 Učitavanje YAML konfiguracije
 
-Skripta učitava `config.yaml` koristeći `pyyaml` biblioteku:
+Modul `app/config_loader.py` odgovoran je za učitavanje i spajanje konfiguracije:
 
 ```python
 import yaml
 from pathlib import Path
 
-def load_book_config(book_dir):
+def load_global_config(config_dir: Path) -> dict:
+    """Učitava config/settings.yaml."""
+    with open(config_dir / "settings.yaml", 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
+
+def load_book_config(book_dir: Path) -> dict:
     """Učitava config.yaml iz direktorija knjige."""
-    config_path = Path(book_dir) / "config.yaml"
-    
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-    
-    return config
+    with open(book_dir / "config.yaml", 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
+
+def merge_config(global_cfg: dict, book_cfg: dict) -> dict:
+    """Spaja globalnu i per-book konfiguraciju; book_cfg ima prioritet."""
+    merged = global_cfg.copy()
+    merged.update(book_cfg)
+    return merged
 ```
-
-### 5.5 Globalni profili u `config/`
-
-Globalni profili (`profile_sf_literature.yaml`, `profile_it_technical.yaml`, `profile_general.yaml`) koriste se kao **template** pri kreiranju novog `config.yaml` za knjigu. Sadrže predefinirane parametre i system prompt za različite žanrove.
 
 ---
 
 ## 6. ARHITEKTURA GLAVNOG IZBORNIKA (CLI)
 
 ### 6.1 Navigacijski princip
-- Jedinstvena tipka **`X`** (ili `x`) za povratak na prethodnu razinu.
-- U glavnom izborniku `X` pokreće **sigurnosni izlaz s dvostrukom potvrdom**.
-- Numerički izbori (`1`, `2`, `3`…) za akcije.
-- **Batch odabir:** `1,3,5` ili `1-5` ili `*` za sve datoteke.
+
+- **Kursorske tipke** (↑ ↓) za kretanje kroz stavke.
+- **Razmaknica ili Enter** za potvrdu odabira.
+- **`X`** na dnu svakog (pod)izbornika za povratak na prethodni izbornik.
+- U glavnom izborniku `X` pokreće **sigurnosni izlaz s potvrdom Y/N**.
+- Svi izbornici su **CLI "GUI"** — vizualni highlight aktivne stavke.
 
 ### 6.2 Stablo izbornika
 
 ```
 [GLAVNI IZBORNIK]
 │
-├── [Y] TEST: [Opis zadnjeg testa]  ← samo ako postoji last_test.json
+├── [Aktivni checkpointi]  ← dinamički blok, prikazuje se samo ako postoje nedovršeni prijevodi
+│   ├── Ukupno nedovršenih: N prijevoda
+│   ├── [1] Nastavi: Dune (Frank Herbert) — 26.31%  [↵ 1-click nastavak]
+│   ├── [2] Nastavi: Foundation (Isaac Asimov) — 71.01%
+│   └── ...
 │
-├── [Checkpointi]  ← dinamički, samo ako postoje spremljeni radovi
-│   └── [n] Nastavi: [Naslov] — XX.XX%
+├── [Y] BRZI TEST: Dune — 2 paragrafa  ← samo ako postoji last_test.json
+│       (Model: local-model | Paragraf | Header: DA)
 │
 ├── [1] Konverzija dokumenata → TXT/MD
-│   └── Lista iz work/input/
-│       └── Odabir: 1,3,5 (batch)
-│           ├── [1] → .txt
-│           ├── [2] → .md
-│           └── [X] povratak
 │
-├── [2] Čišćenje tehničkog šuma ([fixed]) + kreiranje memorije
-│   └── Lista iz work/output/
-│       └── Odabir: 1-5 (batch)
-│           ├── [1] pokreni čišćenje
-│           └── [X] povratak
+├── [2] Čišćenje tehničkog šuma ([fixed]) + memorija
 │
 ├── [3] Prevođenje (LLM)
-│   ├── [1] Napravi testni prevod
-│   │   ├── Odabir datoteke
-│   │   ├── Odabir profila
-│   │   ├── Odabir testa (paragrafi/rečenice/sl)
-│   │   └── Unesi broj
-│   │
-│   └── [2] Prevedi cijelu knjigu
-│       └── Lista [fixed] datoteka iz work/output/
-│           └── Odabir: 1,3,5 (batch)
+│   ├── [1] Napravi testni prevod       ← BRZI TEST (granularnost iz OPCIJA)
+│   ├── [2] Prevedi cijelu knjigu
+│   └── [0] Opcije
+│       ├── [1] Header u testnoj datoteci:  [DA ▼] / [NE ▼]
+│       ├── [2] Granularnost segmenata:     [Paragraf ▼] / [Odlomak ▼] / [Rečenica ▼]
+│       └── [X] Povratak
 │
-├── [4] TTS sinteza → MP3 (po paragrafima)
-│   └── Lista iz work/translated/
-│       └── Odabir: 2,4 (batch)
-│           ├── [1] pokreni sintezu
-│           └── [X] povratak
+├── [4] TTS sinteza → MP3
+│   ├── [1] Zasebne datoteke po odlomcima (001_Ch01_part001.mp3...)
+│   └── [2] Jedna datoteka za cijelu knjigu
 │
 └── [X] Izlaz
     └── "Jeste li sigurni? (Y/N)"
 ```
+
+### 6.3 Batch odabir
+
+- Pojedinačni: `1`
+- Višestruki: `1,3,5`
+- Raspon: `1-5`
+- Sve: `*`
+- Povratak: `X`
 
 ---
 
@@ -434,53 +384,37 @@ Globalni profili (`profile_sf_literature.yaml`, `profile_it_technical.yaml`, `pr
 | `.mobi` | konverzija u EPUB pa parsiranje |
 
 ### 7.2 Tijek obrade
-1. Čitanje svih datoteka iz `work/input/`.
-2. Prikaz numerirane liste korisniku.
-3. Odabir formata izvoza (`.txt` ili `.md`) — podržan batch odabir.
+1. Čitanje datoteka iz `work/input/`.
+2. Prikaz numerirane liste s kursorskom navigacijom.
+3. Odabir formata izvoza (`.txt` ili `.md`).
 4. Parsiranje → čišćenje binarnih artefakata → normalizacija UTF-8.
-5. Kreiranje direktorija `work/output/<NazivKnjige>/`.
+5. Kreiranje direktorija `work/output/<NazivKnjige>/` putem unificirane metode (`app/file_manager.py`).
 6. Zapis u `work/output/<NazivKnjige>/<NazivKnjige>.txt|md`.
-
-### 7.3 Markdown specifičnosti
-Kada je odabran `.md` izvoz:
-- Naslovi poglavlja se mapiraju u `#`, `##`, `###`.
-- Kurzivi i podebljani tekstovi zadržavaju `*...*` i `**...**` sintaksu.
-- Liste ostaju kao `-` ili `1.`.
-- Slike se ispuštaju (TTS ih ne čita), ali se zadržava alt-tekst kao komentar.
 
 ---
 
 ## 8. FAZA 2 — ČIŠĆENJE TEHNIČKOG ŠUMA (`[fixed]`) + KREIRANJE MEMORIJE
 
 ### 8.1 Problem
-PDF i EPUB izvori često umeću:
-- **Zaglavlja (header):** naziv knjige/poglavlja na vrhu svake stranice.
-- **Podnožja (footer):** broj stranice, ime autora.
-- **Prelomljene rečenice:** misao se prekida na granici stranice, a između se ubacuje header/footer.
-
-Bez čišćenja, TTS bi čitao npr. *"...i tada je shvatio da je 42 stranica Dune Frank Herbert 1965. sve bilo uzalud..."* — što ruši audio iskustvo.
+PDF i EPUB izvori često umeću headere/footere i prelomljene rečenice na granicama stranica. Algoritam detektira ponavljajuće obrasce (≥3 pojave na istoj poziciji) i uklanja ih.
 
 ### 8.2 Algoritam čišćenja
-1. **Detekcija ponavljajućih obrazaca:** ako se isti string pojavljuje na ≥3 stranice na istoj poziciji (vrh/dno) → klasificira se kao header/footer.
-2. **Uklanjanje izoliranih brojeva stranica** (`^\s*\d+\s*$`).
-3. **Spajanje prelomljenih rečenica:** ako red završava bez točke/zareza, a sljedeći ne počinje velikim slovom → spajanje bez razmaka.
-4. **Normalizacija whitespace-a:** višestruki razmaci i prazni redovi se sažimaju.
+1. Detekcija ponavljajućih headera/footera (frekvenijska analiza).
+2. Uklanjanje izoliranih brojeva stranica (`^\s*\d+\s*$`).
+3. Spajanje prelomljenih rečenica.
+4. Normalizacija whitespace-a.
 
 ### 8.3 Izlaz
-Datoteka se sprema u `work/output/<Knjiga>/` s obaveznim sufiksom:
 ```
-work/input/Dune.epub  
-  → work/output/Dune/Dune.txt  
+work/input/Dune.epub
+  → work/output/Dune/Dune.txt
     → work/output/Dune/Dune [fixed].txt
+    → work/output/Dune/Dune_memorija.json  (auto-kreiran s placeholderima)
 ```
-
-Sufiks `[fixed]` služi kao **signal** za Fazu 3 da je datoteka prošla kontrolu kvalitete i spremna je za prijevod.
 
 ### 8.4 Automatsko kreiranje memorije
 
-**Ključna promjena:** Prilikom generiranja `[fixed]` datoteke, skripta **automatski kreira** pripadajuću `memorija.json` datoteku s praznom strukturom (placeholder).
-
-**Struktura `work/output/Dune/Dune_memorija.json`:**
+Uz `[fixed]` datoteku automatski se kreira `Dune_memorija.json`:
 
 ```json
 {
@@ -490,69 +424,139 @@ Sufiks `[fixed]` služi kao **signal** za Fazu 3 da je datoteka prošla kontrolu
 }
 ```
 
-**ZAŠTO se memorija kreira ovdje:**
-- Memorija je kontekstualno vezana za **obrađeni tekst** koji se šalje na prijevod.
-- Sve vezano za jednu knjigu (konverzija, čišćenje, konfiguracija, memorija) je na **jednom mjestu** — u `work/output/<Knjiga>/`.
-- Korisnik može ručno popuniti memoriju **prije** pokretanja Faze 3 (prevođenje).
-- Memorija sadrži specifičnosti koje se odnose na **konkretnu knjigu** (likovi, glosar, gramatička pravila).
-
-**Primjer popunjene memorije za SF roman:**
-
-```json
-{
-  "CHARACTERS": {
-    "Paul Atreides": "Treat Paul as MASCULINE. Use masculine verb endings.",
-    "Lady Jessica": "Treat Jessica as FEMININE. Translate as 'gospa Jessica'.",
-    "Chani": "Treat Chani as FEMININE. Use feminine grammar consistently."
-  },
-  "GLOSSARY": {
-    "spice": "začin / melange",
-    "sandworm": "pješčani crv",
-    "bene gesserit": "Bene Gesserit",
-    "kwisatz haderach": "Kwisatz Haderach"
-  },
-  "GRAMMAR_FIXES": {
-    "terminology": "Keep fictional terms in original form or use established Croatian translations.",
-    "names": "Do not croatianize fictional names. Keep 'Paul', 'Jessica', 'Chani' as-is."
-  }
-}
-```
-
-**Primjer popunjene memorije za IT knjigu:**
-
-```json
-{
-  "CHARACTERS": {
-    "Author": "Technical expert. Use professional, neutral language."
-  },
-  "GLOSSARY": {
-    "backend": "backend",
-    "frontend": "frontend",
-    "thread": "thread",
-    "database": "baza podataka",
-    "framework": "framework"
-  },
-  "GRAMMAR_FIXES": {
-    "technical_terms": "DO NOT translate established IT terms. Keep 'backend', 'thread', 'pipeline' in English.",
-    "register": "Maintain professional, academic register. No poetic metaphors."
-  }
-}
-```
+Korisnik može ručno popuniti memoriju prije Faze 3.
 
 ---
 
 ## 9. FAZA 3 — PREVOĐENJE PREKO LOKALNOG LLM-A
 
-### 9.1 API endpoint
+### 9.1 Razlika: TEST vs. PRODUKCIJA
+
+| Svojstvo | TEST prijevod | Produkcijski prijevod |
+|---|---|---|
+| **Header u outputu** | ⚙️ OPCIJA — uključen ili isključen (default: DA) | ❌ NIKAD — čisti tekst spreman za TTS→MP3 |
+| **Ime izlazne datoteke** | `<naziv>_test_<timestamp>.txt` | `<naziv>.txt` |
+| **Odabir količine** | Odlomak / Paragraf / Rečenica (dropdown u OPCIJAMA) | Cijela knjiga (isti granularni način slanja AI-u) |
+| **Output direktorij** | `work/translated/<Knjiga>/` | `work/translated/<Knjiga>/` |
+| **Granularnost slanja AI-u** | Definira se u OPCIJAMA (odlomak/paragraf/rečenica) | Ista postavka iz OPCIJA — vrijedi i za TEST i za produkciju |
+| **Sprema last_test.json** | ✅ DA | ❌ NE |
+| **Checkpoint (nastavak)** | ❌ NE (kratko, ne treba) | ✅ DA — atomski zapis nakon svakog segmenta |
+
+> **Ključno pravilo:** Produkcijska datoteka je uvijek **čisti prevedeni tekst** bez ikakvih dodataka — jer se direktno provlači kroz TTS i pretvara u MP3. Header u MP3 audiobuku ne smije postojati.
+
+### 9.2 Granularnost — OPCIJE (zajedničke za TEST i produkciju)
+
+Granularnost definira kako se tekst šalje AI modelu. Postavlja se u OPCIJAMA izbornika `[3] → [0] Opcije`:
+
+```
+OPCIJE — Prevođenje:
+  ┌─────────────────────────────────────────────┐
+  │ [1] Header u testnoj datoteci:   [DA  ▼]   │
+  │ [2] Granularnost segmenata:      [Paragraf ▼]│
+  │                                             │
+  │ [X] Povratak                                │
+  └─────────────────────────────────────────────┘
+```
+
+- Obje opcije su CLI dropdown (kursorske tipke ↑↓ za odabir vrijednosti).
+- Promjena se **odmah primjenjuje** i prikazuje u svim prikaze (živi preview).
+- Vrijednosti se sprema u `config/settings.yaml` (`translation.test_header`, `translation.granularity`).
+
+**Dostupne granularnosti:**
+- **Odlomak** — chunk od ~1500 tokena (više paragrafa zajedno)
+- **Paragraf** — jedan `\n\n` blok
+- **Rečenica** — jedna rečenica (najsporije, ali najkvalitetnije)
+
+**Default vrijednosti** (ako nema zapisa u konfiguraciji): Paragraf, 1 komad, Header: DA.
+
+### 9.3 TEST prijevod — tijek i izlaz
+
+1. Korisnik bira datoteku i broj komada (1 odlomak, 2 paragrafa, 3 rečenice...).
+2. Postavke granularnosti i headera preuzimaju se iz OPCIJA.
+3. Prijevod se izvršava za odabrani broj segmenata.
+4. **Ime izlazne datoteke:** `Dune_test_2026-07-31_110820.txt`
+5. **Header (ako je uključen):**
+
+```
+================================================================================
+TEST PRIJEVOD — Dynamic Book Translator v0.4.0
+================================================================================
+Knjiga:        Dune
+Autor:         Frank Herbert
+Model:         local-model
+Provider:      lm_studio
+Temperature:   0.25 | Top-p: 0.80 | Top-k: 15
+================================================================================
+Granularnost:  Paragraf
+Obrađeno:      2 paragrafa | 347 riječi | 2.104 znakova
+Brzina:        42 tok/s
+Početak:       2026-07-31 11:08:20
+Kraj:          2026-07-31 11:09:05
+Trajanje:      0m 45s
+================================================================================
+
+[POČETAK PRIJEVODA]
+Paul je stajao na rubu pustinje...
+```
+
+6. Parametri se sprema u `work/state/last_test.json` za BRZI TEST.
+
+### 9.4 Struktura `work/state/last_test.json`
+
+```json
+{
+  "timestamp": "2026-07-31T11:08:20",
+  "book_title": "Dune",
+  "book_dir": "work/output/Dune",
+  "book_file": "work/output/Dune/Dune [fixed].txt",
+  "config_file": "work/output/Dune/config.yaml",
+  "memorija_file": "work/output/Dune/Dune_memorija.json",
+  "model": "local-model",
+  "api_provider": "lm_studio",
+  "test_granularity": "paragraph",
+  "test_count": 2,
+  "include_header": true,
+  "description": "Dune — 2 paragrafa"
+}
+```
+
+### 9.5 Produkcijski prijevod — tijek i izlaz
+
+1. Odabir `[fixed]` datoteke — batch podržan.
+2. Učitavanje `config.yaml` i `memorija.json`.
+3. Injekcija memorije u system prompt.
+4. Segmentiranje prema postavci iz OPCIJA (odlomak/paragraf/rečenica).
+5. Slanje segment-po-segment na LLM API.
+6. Čišćenje reasoning tagova (ako `enable_reasoning: false`).
+7. Zapis **ČISTOG TEKSTA** (bez headera) u `work/translated/<Knjiga>/<Knjiga>.txt`.
+8. Atomski zapis checkpointa nakon svakog segmenta.
+9. Opcionalno: **statistike u zasebnoj datoteci** `<Knjiga>_stats.txt` (ako je opcija uključena).
+
+**Zasebna statistička datoteka** `work/translated/Dune/Dune_stats.txt` (opcionalno):
+```
+================================================================================
+PRODUKCIJSKI PRIJEVOD — Dynamic Book Translator v0.4.0
+================================================================================
+Knjiga:        Dune | Autor: Frank Herbert
+Model:         local-model | Provider: lm_studio
+Temperature:   0.25 | Top-p: 0.80
+Granularnost:  Paragraf
+Ukupno:        2847 paragrafa | 187.543 riječi | 1.142.670 znakova
+Prosj. brzina: 38 tok/s
+Početak:       2026-07-31 11:00:00
+Kraj:          2026-07-31 14:22:11
+================================================================================
+```
+
+### 9.6 API endpoint
+
 ```
 POST http://127.0.0.1:1234/v1/chat/completions
-Content-Type: application/json
-
 {
   "model": "lokalni-model",
   "messages": [
-    {"role": "system", "content": "<system_prompt iz config.yaml> + <JSON memorija>"},
-    {"role": "user",   "content": "<odlomak za prijevod>"}
+    {"role": "system", "content": "<system_prompt> + <JSON memorija>"},
+    {"role": "user",   "content": "<segment>"}
   ],
   "temperature": 0.25,
   "top_p": 0.80,
@@ -561,67 +565,50 @@ Content-Type: application/json
 }
 ```
 
-### 9.2 Tijek obrade
-1. Filtriranje `work/output/` — prikazuju se **samo** datoteke s `[fixed]` u nazivu.
-2. Odabir datoteke — podržan batch odabir.
-3. Učitavanje `config.yaml` iz direktorija knjige.
-4. Učitavanje `memorija.json` iz istog direktorija.
-5. Injekcija memorije u system prompt.
-6. Chunkiranje teksta na odlomke (po ~1500 tokena).
-7. Slanje odlomak-po-odlomak na LLM API.
-8. Čišćenje odgovora od XML tagova (ako `enable_reasoning: false`).
-9. Zapis u `work/translated/<Knjiga>/<Knjiga>.txt|md` (bez `[fixed]` sufiksa).
-10. Ažuriranje `work/state/translation_checkpoints.json` nakon svakog odlomka.
-
-### 9.3 Injekcija system prompta i memorije
-
-```python
-def build_system_prompt(config, memorija):
-    """Kombinira system prompt iz config.yaml s JSON memorijom."""
-    prompt = config['system_prompt']
-    
-    if memorija:
-        prompt += "\n\n[DODATNA MEMORIJA — JSON]\n"
-        prompt += f"CHARACTERS:\n"
-        for name, desc in memorija.get('CHARACTERS', {}).items():
-            prompt += f"  - {name}: {desc}\n"
-        
-        prompt += f"\nGLOSSARY:\n"
-        for term, translation in memorija.get('GLOSSARY', {}).items():
-            prompt += f"  - {term} → {translation}\n"
-        
-        prompt += f"\nGRAMMAR_FIXES:\n"
-        for rule, desc in memorija.get('GRAMMAR_FIXES', {}).items():
-            prompt += f"  - {rule}: {desc}\n"
-    
-    return prompt
-```
-
 ---
 
-## 10. FAZA 4 — TTS Sinteza u MP3 po paragrafima
+## 10. FAZA 4 — TTS SINTEZA U MP3
 
-### 10.1 Ulaz
-Datoteke iz `work/translated/` (gotovi hrvatski prijevodi).
+### 10.1 Opcije izlaza (OPCIJE izbornik)
 
-### 10.2 Tijek
-1. Čitanje teksta po paragrafima (ne po rečenicama — kako je ranije bilo).
-2. Za svaki paragraf generira se zasebna `.mp3` datoteka.
-3. Slanje svakog paragrafa u TTS engine (npr. `edge-tts` s glasom `hr-HR-GabrijelaNeural`).
-4. Zapis u `work/audiobooks/<Knjiga>/` s numeriranim nazivima:
-   - `001.mp3` — prvi paragraf
-   - `002.mp3` — drugi paragraf
-   - `003.mp3` — treći paragraf
-   - ...
+Korisnik bira unutar OPCIJA:
 
-### 10.3 Zašto po paragrafima
-- **Fleksibilnost:** korisnik može preskočiti ili ponoviti pojedini paragraf.
-- **Organizacija:** lakše upravljanje velikim knjigama.
-- **Backup:** ako jedan MP3 faila, ostali su sigurni.
-- **Streaming:** moguće streamati audio po paragrafima.
+| Opcija | Opis |
+|---|---|
+| **Zasebne datoteke po odlomcima** | Svaki odlomak → poseban `.mp3` (preporučeno) |
+| **Jedna datoteka** | Cijela knjiga u jednom `.mp3` |
 
-### 10.4 Zašto `[fixed]` faza kritična za MP3
-Budući da je u Fazi 2 uklonjen sav tehnički šum, TTS glas čita **isključivo tečni narativ** — bez iznenadnih prekida, brojeva stranica ili ponavljanja zaglavlja usred rečenice.
+### 10.2 Imenovanje MP3 datoteka
+
+Format: `NNN_ChXX_partXXX.mp3`
+
+```
+001_Ch01_part001.mp3
+002_Ch02_part001.mp3
+003_Ch02_part002.mp3
+004_Ch02_part003.mp3
+005_Ch03_part001.mp3
+```
+
+- `NNN` — globalni redni broj (001, 002, 003...)
+- `ChXX` — redni broj poglavlja (Ch01, Ch02...)
+- `partXXX` — redni broj dijela unutar poglavlja (part001, part002...)
+
+### 10.3 ID3 metapodaci u MP3
+
+Svaka MP3 datoteka dobiva embedded metapodatke (via `mutagen`):
+
+```
+Artist:  Frank Herbert
+Album:   Dune
+Title:   Chapter 1 — Part 1
+Track:   001
+Comment: Generated by Dynamic Book Translator v0.4.0
+```
+
+### 10.4 Direktorij izlaza
+
+MP3 datoteke se sprema u `work/audiobooks/<Knjiga>/`. Kreiranje direktorija i suffix-increment rade se putem unificirane metode iz `app/file_manager.py`.
 
 ---
 
@@ -629,101 +616,29 @@ Budući da je u Fazi 2 uklonjen sav tehnički šum, TTS glas čita **isključivo
 
 ### 11.1 Princip rada
 
-Svaki podizbornik omogućuje **višestruki odabir** datoteka koristeći:
-- Pojedinačni odabir: `1` (samo prva datoteka)
-- Višestruki odabir: `1,3,5` (datoteke 1, 3 i 5)
-- Raspon: `1-5` (datoteke od 1 do 5)
-- Sve: `*` (sve datoteke)
-- Povratak: `X`
+Svaki podizbornik omogućuje višestruki odabir datoteka koristeći:
+- `1` — jedan odabir
+- `1,3,5` — višestruki odabir
+- `1-5` — raspon
+- `*` — sve datoteke
+- `X` — povratak
 
-### 11.2 Implementacija u CLI
+### 11.2 Batch u svakoj fazi
 
-```python
-def get_file_selection(file_list):
-    """Omogućuje batch odabir datoteka."""
-    print("\nDostupne datoteke:")
-    for i, f in enumerate(file_list, 1):
-        print(f"  [{i}] {f}")
-    
-    print("\nOdaberi datoteke (npr. '1', '1,3,5', '1-5', '*' za sve, 'X' za povratak):")
-    selection = input("> ").strip()
-    
-    if selection.upper() == 'X':
-        return None
-    
-    indices = parse_selection(selection, len(file_list))
-    return [file_list[i] for i in indices]
-
-def parse_selection(selection, max_count):
-    """Parsira '1,3,5' ili '1-5' ili '*' u listu indeksa."""
-    if selection == '*':
-        return list(range(max_count))
-    
-    indices = []
-    parts = selection.split(',')
-    for part in parts:
-        if '-' in part:
-            start, end = part.split('-')
-            indices.extend(range(int(start)-1, int(end)))
-        else:
-            indices.append(int(part)-1)
-    
-    return sorted(set(i for i in indices if 0 <= i < max_count))
-```
-
-### 11.3 Batch obrada u svakoj fazi
-
-**Faza 1 (Konverzija):**
-```
-[1] Konverzija dokumenata → TXT/MD
-├── Lista datoteka iz work/input/
-├── Odabir: 1,3,5 (batch)
-├── Odabir formata: [1] TXT, [2] MD
-└── Batch konverzija svih odabranih datoteka
-```
-
-**Faza 2 (Čišćenje + memorija):**
-```
-[2] Čišćenje tehničkog šuma + kreiranje memorije
-├── Lista sirovih .txt/.md iz work/output/
-├── Odabir: 1-5 (batch)
-└── Batch čišćenje + auto-kreiranje memorija.json za svaku knjigu
-```
-
-**Faza 3 (Prevođenje):**
-```
-[3] Prevođenje (LLM)
-├── Lista [fixed] datoteka
-├── Odabir: * (sve)
-└── Batch prevođenje s učitavanjem memorije za svaku knjigu
-```
-
-**Faza 4 (TTS):**
-```
-[4] TTS sinteza → MP3 (po paragrafima)
-├── Lista prevedenih datoteka
-├── Odabir: 2,4 (batch)
-└── Batch TTS sinteza — svaki paragraf u zasebni MP3
-```
-
-### 11.4 Progress tracking za batch
-
-Za batch operacije prikazuje se ukupni progress:
-```
-[INFO] Pokrećem batch konverziju za 5 datoteka...
-[1/5] Konvertiram Dune.epub → Dune.txt ... OK
-[2/5] Konvertiram Foundation.epub → Foundation.txt ... OK
-[3/5] Konvertiram Neuromancer.epub → Neuromancer.txt ... OK
-[4/5] Konvertiram Snow Crash.epub → Snow Crash.txt ... OK
-[5/5] Konvertiram Hyperion.epub → Hyperion.txt ... OK
-[DONE] Batch konverzija završena: 5/5 uspješno
-```
+- **Faza 1 (Konverzija):** batch odabir iz `work/input/`, odabir formata TXT/MD.
+- **Faza 2 (Čišćenje):** batch odabir sirovih `.txt/.md` iz `work/output/`.
+- **Faza 3 (Prevođenje):** batch odabir `[fixed]` datoteka ili jedna po jedna s resumeom.
+- **Faza 4 (TTS):** batch odabir prevedenih datoteka iz `work/translated/`.
 
 ---
 
 ## 12. MULTI-CHECKPOINT SUSTAV PERZISTENCIJE
 
-### 12.1 Struktura `work/state/translation_checkpoints.json`
+### 12.1 Svrha
+
+Svaki prijevod koji se prekine (struja, crash, X prekid) automatski se sprema u checkpoint. Pri sljedećem pokretanju aplikacije, glavni izbornik odmah prikazuje sve nedovršene prijevode s postotkom napretka. Odabir jednog od njih **1-klikom nastavlja** prijevod od zadnje točke.
+
+### 12.2 Struktura `work/state/translation_checkpoints.json`
 
 ```json
 {
@@ -731,6 +646,7 @@ Za batch operacije prikazuje se ukupni progress:
     {
       "id": "dune_fixed",
       "title": "Dune",
+      "author": "Frank Herbert",
       "book_dir": "work/output/Dune",
       "source_file": "work/output/Dune/Dune [fixed].txt",
       "target_file": "work/translated/Dune/Dune.txt",
@@ -739,101 +655,147 @@ Za batch operacije prikazuje se ukupni progress:
       "total_paragraphs": 2847,
       "current_paragraph": 749,
       "percent": 26.31,
-      "last_updated": "2026-07-30T14:22:11"
+      "granularity": "paragraph",
+      "last_updated": "2026-07-31T11:00:00"
     },
     {
-      "id": "clean_code_fixed",
-      "title": "Clean Code",
-      "book_dir": "work/output/Clean_Code",
-      "source_file": "work/output/Clean_Code/Clean Code [fixed].md",
-      "target_file": "work/translated/Clean_Code/Clean Code.md",
-      "config_file": "work/output/Clean_Code/config.yaml",
-      "memorija_file": "work/output/Clean_Code/Clean_Code_memorija.json",
+      "id": "foundation_fixed",
+      "title": "Foundation",
+      "author": "Isaac Asimov",
+      "book_dir": "work/output/Foundation",
+      "source_file": "work/output/Foundation/Foundation [fixed].txt",
+      "target_file": "work/translated/Foundation/Foundation.txt",
+      "config_file": "work/output/Foundation/config.yaml",
+      "memorija_file": "work/output/Foundation/Foundation_memorija.json",
       "total_paragraphs": 1204,
       "current_paragraph": 855,
       "percent": 71.01,
-      "last_updated": "2026-07-29T21:07:43"
+      "granularity": "paragraph",
+      "last_updated": "2026-07-30T21:07:43"
     }
   ]
 }
 ```
 
-### 12.2 Ključna svojstva
-- **Izolacija povijesti:** nastavak jedne knjige **nikada** ne dira checkpoint druge.
-- **Maksimalan broj paralelnih naslova:** neograničen (preporuka ≤10 radi preglednosti).
-- **Real-time ažuriranje:** nakon svakog uspješno prevedenog odlomka.
-- **Atomski zapis:** `json.dump` u privremenu datoteku pa `os.replace` — zaštita od korupcije pri nestanku struje.
+### 12.3 Prikaz u glavnom izborniku
 
-### 12.3 Nastavak rada
-Kada korisnik odabere checkpoint iz glavnog izbornika:
-1. Učitavaju se svi parametri (izvorišna datoteka, config.yaml, memorija.json).
-2. Čita se `current_paragraph`.
-3. Prevod se nastavlja **točno od tog odlomka**.
-4. Tekst se **append-a** u postojeću `work/translated/` datoteku (ne prepisuje).
+Blok s nedovršenim prijevodima prikazuje se **odmah na vrhu** glavnog izbornika, iznad BRZI TEST opcije:
+
+```
+  NEDOVRŠENI PRIJEVODI (2):
+  [1] ▶ Nastavi: Dune (Frank Herbert) ........... 26.31%  [749/2847 par.]
+  [2] ▶ Nastavi: Foundation (Asimov) ............. 71.01%  [855/1204 par.]
+```
+
+Odabir numeričke opcije iz ovog bloka **odmah nastavlja prijevod** — bez dodatnih pitanja.
+
+### 12.4 Ključna svojstva
+- Izolacija: nastavak jedne knjige nikad ne dira checkpoint druge.
+- Real-time ažuriranje: atomski zapis nakon svakog segmenta.
+- Atomski zapis: `json.dump` u `.tmp` → `os.replace()` — zaštita od korupcije pri nestanku struje.
+- Nastavak: tekst se **append-a** u postojeću `work/translated/` datoteku — ne prepisuje.
+- Maksimalni broj paralelnih naslova: neograničen (preporuka ≤10).
 
 ---
 
-## 13. 1-CLICK TEST SUSTAV
+## 13. TEST SUSTAV — BRZI TESTNI PRIJEVOD
 
 ### 13.1 Svrha
 
-Sustav pamti **zadnje testne parametre** kako bi se moglo brzo ponoviti ista operacija s različitim modelom (za usporedbu kvalitete prijevoda).
+Brzi testni prijevod za provjeru kvalitete modela i parametara. Podržava tri razine granularnosti jer je ponekad potreban tekst kraći od odlomka:
 
-### 13.2 Struktura `work/state/last_test.json`
+- **Odlomak** — chunk od ~1500 tokena (više paragrafa zajedno)
+- **Paragraf** — jedan `\n\n` blok
+- **Rečenica** — jedna rečenica
 
-```json
-{
-  "timestamp": "2026-07-30T14:22:11",
-  "book_title": "Dune",
-  "book_dir": "work/output/Dune",
-  "book_file": "work/output/Dune/Dune [fixed].txt",
-  "config_file": "work/output/Dune/config.yaml",
-  "memorija_file": "work/output/Dune/Dune_memorija.json",
-  "model": "local-model",
-  "api_provider": "lm_studio",
-  "test_mode": "paragraphs",
-  "test_count": 2,
-  "description": "Prevođenje knjige Dune - prva 2 paragrafa"
-}
+### 13.2 Ključne razlike TEST vs. PRODUKCIJA
+
+| | TEST | PRODUKCIJA |
+|---|---|---|
+| **Header** | OPCIJA — DA ili NE (default: DA) | NIKAD — čisti tekst za TTS |
+| **Statistička datoteka** | U samom headeru (ako uključen) | Zasebna `_stats.txt` datoteka (opcionalno) |
+| **Naziv datoteke** | `<naziv>_test_<timestamp>.txt` | `<naziv>.txt` |
+| **Checkpoint** | NE (kratka obrada) | DA — nastavak nakon prekida |
+
+> **Zašto je produkcija uvijek čista?**  
+> Produkcijska `.txt` datoteka se direktno provlači kroz TTS i pretvara u MP3. Header s tehničkim detaljima u audiobuku ne smije postojati — slušatelj bi čuo "Model: local-model | Temperature: 0.25...".
+
+### 13.3 Header u testnoj datoteci
+
+Ako je uključen (opcija u OPCIJAMA), testna datoteka sadrži:
+
+```
+================================================================================
+TEST PRIJEVOD — Dynamic Book Translator v0.4.0
+================================================================================
+Knjiga:        Dune
+Autor:         Frank Herbert
+Model:         local-model
+Provider:      lm_studio
+Temperature:   0.25 | Top-p: 0.80 | Top-k: 15 | Repeat penalty: 1.1
+================================================================================
+Granularnost:  Paragraf
+Obrađeno:      2 paragrafa | 347 riječi | 2.104 znakova
+Brzina:        42 tok/s
+Početak:       2026-07-31 11:08:20
+Kraj:          2026-07-31 11:09:05
+Trajanje:      0m 45s
+================================================================================
+
+[POČETAK PRIJEVODA]
+Paul je stajao na rubu pustinje...
 ```
 
-### 13.3 Prikaz u glavnom izborniku
+### 13.4 BRZI TEST u glavnom izborniku
 
-Ako postoji `last_test.json`, u glavnom izborniku se prikazuje:
+```
+╔══════════════════════════════════════════════════════════╗
+║  DYNAMIC BOOK TRANSLATOR v0.4                            ║
+╠══════════════════════════════════════════════════════════╣
+║                                                          ║
+║  NEDOVRŠENI PRIJEVODI:                                   ║
+║  [1] ▶ Nastavi: Dune (Frank Herbert) ........... 26.31% ║
+║  [2] ▶ Nastavi: Foundation (Asimov) ............ 71.01% ║
+║                                                          ║
+║  [Y] BRZI TEST: Dune — 2 paragrafa                      ║
+║       Model: local-model | Paragraf | Header: DA         ║
+║                                                          ║
+║  [1] Konverzija dokumenata → TXT/MD                      ║
+║  [2] Čišćenje tehničkog šuma + memorija                  ║
+║  [3] Prevođenje (LLM)                                    ║
+║  [4] TTS sinteza u MP3                                   ║
+║  [X] Izlaz                                               ║
+╚══════════════════════════════════════════════════════════╝
+```
+
+- Blok nedovršenih prijevoda prikazuje se samo ako postoje checkpointi.
+- Svaki checkpoint je 1-click nastavak — odabir brojke odmah nastavlja prijevod.
+- `[Y]` ponavlja zadnji test s istim parametrima — 1-click pokretanje.
+
+### 13.5 OPCIJE izbornik
 
 ```
 ╔══════════════════════════════════════════════════╗
-║  GLAVNI IZBORNIK                                 ║
+║  OPCIJE — Prevođenje                             ║
 ╠══════════════════════════════════════════════════╣
-║  [Y] TEST: Prevođenje knjige Dune - prva 2 paragrafa
-║      (Model: local-model, Provider: lm_studio)   ║
 ║                                                  ║
-║  [1] Konverzija dokumenata → TXT/MD              ║
-║  [2] Čišćenje tehničkog šuma + memorija          ║
-║  [3] Prevođenje (LLM)                            ║
-║  [4] TTS sinteza u MP3 (po paragrafima)          ║
-║  [X] Izlaz                                       ║
+║  [1] Header u testnoj datoteci:                  ║
+║      ● DA                                        ║
+║      ○ NE                                        ║
+║                                                  ║
+║  [2] Granularnost segmenata:                     ║
+║      ○ Odlomak  (~1500 tokena)                   ║
+║      ● Paragraf (jedan \\n\\n blok)              ║
+║      ○ Rečenica                                  ║
+║                                                  ║
+║  [X] Povratak                                    ║
 ╚══════════════════════════════════════════════════╝
 ```
 
-### 13.4 Podizbornik "Napravi testni prevod"
-
-Unutar Faze 3 (Prevođenje) dodaje se podizbornik:
-
-```
-[3] Prevođenje (LLM)
-├── [1] Napravi testni prevod
-│   ├── Odabir datoteke: [lista [fixed] datoteka]
-│   ├── Odabir profila: [1] SF, [2] IT, [3] General
-│   ├── Odabir testa:
-│   │   ├── [1] Prvih N paragrafa (default: 2)
-│   │   ├── [2] Prvih N rečenica (default: 5)
-│   │   └── [3] Slučajnih N odlomaka (default: 3)
-│   └── Unesi broj: [input]
-│
-├── [2] Prevedi cijelu knjigu
-└── [X] Povratak
-```
+- Kretanje: ↑↓ kursorske tipke.
+- Odabir: Enter ili Razmaknica.
+- Promjena se odmah odražava u prikazu glavnog izbornika (BRZI TEST linija).
+- Vrijednosti se atomski sprema u `config/settings.yaml`.
 
 ---
 
@@ -841,129 +803,15 @@ Unutar Faze 3 (Prevođenje) dodaje se podizbornik:
 
 ### 14.1 Razine logiranja
 
-| Razina | Parametar | Default | Opis |
+| Razina | Parametar u settings.yaml | Default | Opis |
 |---|---|---|---|
-| **Osnovno** | Uvijek aktivno | ON | Bilježi početak/kraj svake knjige, greške, checkpoint ažuriranja |
-| **Verbatim** | `LOG_VERBATIM` | OFF | Detaljni trace svake akcije, ulazni/izlazni podaci |
-| **LLM Debug** | `LOG_LLM_RESPONSES` | OFF | Snima pune LLM odgovore za analizu halucinacija |
+| **Osnovno** | Uvijek aktivno | ON | Početak/kraj knjige, greške, checkpoint |
+| **Verbatim** | `logging.verbatim` | OFF | Trace svake akcije |
+| **LLM Debug** | `logging.llm_responses` | OFF | Puni LLM odgovori za analizu |
 
-### 14.2 Struktura log datoteka
+### 14.2 Reasoning toggle
 
-```
-work/logs/
-├── 2026-07-30_142211_dynamic_book_translator_v4.3.0_debug.log
-├── 2026-07-30_142211_dynamic_book_translator_v4.3.0_verbatim.log
-└── llm_responses/
-    ├── Dune/
-    │   ├── chunk_001.json
-    │   ├── chunk_002.json
-    │   └── ...
-    └── Clean_Code/
-        └── ...
-```
-
-### 14.3 Format log headera
-
-Svaka log datoteka počinje s headerom:
-
-```
-DYNAMIC BOOK TRANSLATOR  v4.3.0
-LOG PATH:    C:\Users\mamba\project\work\logs\2026-07-30_142211_dynamic_book_translator_v4.3.0_debug.log
-DATE:        2026-07-30 14:22:11
-------------------------------------------------------------
-
-14:22:11 [INFO] Pokrećem prijevod knjige: Dune
-14:22:11 [INFO] Koristim model: local-model (provider: lm_studio)
-14:25:33 [INFO] Završeno prevođenje knjige: Dune (2847 odlomaka, 100%)
-14:25:33 [INFO] Checkpoint ažuriran: Dune → 100%
-```
-
-### 14.4 Implementacija logiranja
-
-```python
-import logging
-from datetime import datetime
-import json
-import os
-
-def setup_logging():
-    """Inicijalizira log sustav s headerom."""
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H%M%S')
-    script_name_safe = SCRIPT_NAME.lower().replace(' ', '_')
-    log_filename = f"{timestamp}_{script_name_safe}_v{SCRIPT_VERSION}_debug.log"
-    log_path = os.path.join(LOGS_DIR, log_filename)
-    
-    # Header
-    header = f"""
-{SCRIPT_NAME.upper()}  v{SCRIPT_VERSION}
-LOG PATH:    {os.path.abspath(log_path)}
-DATE:        {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-------------------------------------------------------------
-"""
-    
-    # Osnovni logger
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s',
-        datefmt='%H:%M:%S',
-        handlers=[
-            logging.FileHandler(log_path, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    # Zapiši header
-    with open(log_path, 'w', encoding='utf-8') as f:
-        f.write(header)
-    
-    # Verbatim logger (ako je uključen)
-    if LOG_VERBATIM:
-        verbatim_filename = f"{timestamp}_{script_name_safe}_v{SCRIPT_VERSION}_verbatim.log"
-        verbatim_path = os.path.join(LOGS_DIR, verbatim_filename)
-        
-        verbatim_logger = logging.getLogger('verbatim')
-        verbatim_logger.setLevel(logging.DEBUG)
-        vh = logging.FileHandler(verbatim_path, encoding='utf-8')
-        vh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
-        verbatim_logger.addHandler(vh)
-    
-    # LLM response logger
-    if LOG_LLM_RESPONSES:
-        os.makedirs(f"{LOGS_DIR}/llm_responses", exist_ok=True)
-
-def log_basic(message):
-    """Osnovni log - uvijek aktivan."""
-    logging.info(message)
-
-def log_verbatim(message):
-    """Detaljni trace - samo ako LOG_VERBATIM=True."""
-    if LOG_VERBATIM:
-        logging.getLogger('verbatim').debug(message)
-
-def log_llm_response(book_title, chunk_index, prompt, response):
-    """Snima LLM odgovor - samo ako LOG_LLM_RESPONSES=True."""
-    if LOG_LLM_RESPONSES:
-        book_dir = f"{LOGS_DIR}/llm_responses/{book_title}"
-        os.makedirs(book_dir, exist_ok=True)
-        
-        log_data = {
-            "timestamp": datetime.now().isoformat(),
-            "chunk_index": chunk_index,
-            "prompt": prompt,
-            "response": response
-        }
-        
-        with open(f"{book_dir}/chunk_{chunk_index:03d}.json", 'w', encoding='utf-8') as f:
-            json.dump(log_data, f, ensure_ascii=False, indent=2)
-```
-
-## 14.5 Reasoning toggle
-
-Parametar `ENABLE_REASONING` kontrolira hoće li se LLM odgovori čistiti od `
-
-Parametar `ENABLE_REASONING` kontrolira hoće li se LLM odgovori čistiti od reasoning tagova. Kada je `enable_reasoning: false` u `config.yaml`, skripta automatski uklanja sve sadržaje između `<think>` i `</think>` tagova te `<reasoning>` i `</reasoning>` tagova prije spremanja prijevoda. Ovo je važno jer neki modeli generiraju interno razmišljanje koje ne treba završiti u finalnom prijevodu.
+Parametar `logging.enable_reasoning` (ili per-book `enable_reasoning` u `config.yaml`) kontrolira brisanje `<think>...</think>` i `<reasoning>...</reasoning>` tagova iz LLM odgovora.
 
 ---
 
@@ -971,324 +819,366 @@ Parametar `ENABLE_REASONING` kontrolira hoće li se LLM odgovori čistiti od rea
 
 ### 15.1 Podržani provideri
 
-| Provider | API Base URL | Autentikacija | Napomene |
+| Provider | Tip | API Base URL | Autentikacija |
 |---|---|---|---|
-| `lm_studio` | `http://127.0.0.1:1234/v1` | Nema | Lokalni, OpenAI-kompatibilan |
-| `openai` | `https://api.openai.com/v1` | `API_KEY` | GPT-4, GPT-3.5 |
-| `gemini` | `https://generativelanguage.googleapis.com/v1beta` | `API_KEY` | Google Gemini |
-| `qwen` | `https://dashscope.aliyuncs.com/api/v1` | `API_KEY` | Alibaba Qwen |
+| `lm_studio` | Lokalni | `http://127.0.0.1:1234/v1` | Nema |
+| `ollama_local` | Lokalni | `http://127.0.0.1:11434/api` | Nema |
+| `ollama_cloud` | Cloud | `https://api.ollama.ai/v1` | `.env: OLLAMA_API_KEY` |
+| `openai` | Cloud | `https://api.openai.com/v1` | `.env: OPENAI_API_KEY` |
+| `gemini` | Cloud | `https://generativelanguage.googleapis.com/v1beta` | `.env: GEMINI_API_KEY` |
+| `qwen` | Cloud | `https://dashscope.aliyuncs.com/api/v1` | `.env: QWEN_API_KEY` |
+| `custom` | Bilo koji | Konfigurabilno | `.env: CUSTOM_API_KEY` |
 
-### 15.2 Konfiguracija
+Sustav je dizajniran za **lako dodavanje novih providera** — svaki provider implementira isti adapter interface u `app/translator.py`.
 
-Globalni API parametri definirani su u `main.py`:
-- `API_PROVIDER` — odabir providera
-- `API_BASE_URL` — endpoint URL
-- `API_KEY` — API ključ (prazno za lokalni LM Studio)
-- `DEFAULT_MODEL` — naziv modela
+### 15.2 Pohrana API ključeva — `.env` datoteka
 
-### 15.3 Per-book API override
+**Svi API ključevi čitaju se isključivo iz `.env` datoteke** u root direktoriju projekta. Ključevi se **nikada** ne upisuju u YAML konfiguraciju ni Python kod.
 
-Svaka knjiga može imati vlastiti API provider i model u `config.yaml`:
-- `api_provider` — override globalnog providera
-- `model` — override globalnog modela
-- `api_key_override` — opcionalni API ključ specifičan za knjigu
+**`.env` datoteka (root direktorij):**
+```
+# Dynamic Book Translator — API Keys
+# NE COMMITATI u Git — .gitignore ignorira ovu datoteku
 
-### 15.4 Unificirani API client
+OPENAI_API_KEY=sk-...
+GEMINI_API_KEY=AI...
+QWEN_API_KEY=sk-...
+OLLAMA_API_KEY=...
+CUSTOM_API_KEY=...
+```
 
-Skripta koristi unificirani API client koji automatski prilagođava poziv prema odabranom provideru. Za LM Studio i OpenAI koristi se OpenAI-kompatibilan format. Za Gemini i Qwen implementirani su specifični adapteri.
+**Python učitavanje (via `python-dotenv`):**
+```python
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Čita .env iz root direktorija
+
+api_key = os.getenv("OPENAI_API_KEY", "")
+```
+
+`python-dotenv` dodan u `requirements.txt`.
+
+### 15.3 Konfiguracija providera u `config/settings.yaml`
+
+```yaml
+api:
+  provider: "lm_studio"    # Aktivni provider
+  auto_detect_model: true  # Auto-detekcija iz LM Studio / Ollama
+
+  providers:
+    lm_studio:
+      base_url: "http://127.0.0.1:1234/v1"
+      model: ""            # Prazno = auto-detect
+    ollama_local:
+      base_url: "http://127.0.0.1:11434/api"
+      model: "llama3.2"
+    ollama_cloud:
+      base_url: "https://api.ollama.ai/v1"
+      model: "llama3.2"
+      key_env: "OLLAMA_API_KEY"
+    openai:
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4o"
+      key_env: "OPENAI_API_KEY"
+    gemini:
+      base_url: "https://generativelanguage.googleapis.com/v1beta"
+      model: "gemini-1.5-pro"
+      key_env: "GEMINI_API_KEY"
+    qwen:
+      base_url: "https://dashscope.aliyuncs.com/api/v1"
+      model: "qwen-turbo"
+      key_env: "QWEN_API_KEY"
+    custom:
+      base_url: ""
+      model: ""
+      key_env: "CUSTOM_API_KEY"
+```
+
+### 15.4 Per-book API override
+
+Svaka knjiga može override-ati globalnog providera kroz `work/output/<Knjiga>/config.yaml`:
+```yaml
+api_provider: "openai"   # override globalnog providera
+model: "gpt-4o"          # override modela
+# API ključ se uvijek čita iz .env — nikad ne piše u config.yaml
+```
+
+### 15.5 Dodavanje novog providera
+
+Za dodavanje novog providera dovoljno je:
+1. Dodati blok u `config/settings.yaml` pod `api.providers`.
+2. Dodati `KEY=...` u `.env`.
+3. Implementirati adapter u `app/translator.py` koji nasljeđuje `BaseAPIAdapter`.
 
 ---
 
-## 16. AUTOMATSKA DETEKCIJA LIKOVA — ANALIZA IZVEDIVOSTI
+## 16. AUTOMATSKA DETEKCIJA LIKOVA
 
-### 16.1 Pitanje
+### 16.1 Opcija A: Heuristička detekcija (lokalno, brzo, ~60-70% preciznosti)
+### 16.2 Opcija B: AI-bazirana detekcija (preporučeno, ~95% preciznosti)
 
-Postoji li mogućnost prilikom obrade dokumenta da se pronađu svi likovi koji se spominju u dokumentu, kako bi se kasnije mogao jednostavnije napraviti prompt (zbog prevoda ispravnog gendera) — ili to mora odraditi AI?
-
-### 16.2 Odgovor
-
-**Da, postoji mogućnost automatske detekcije likova, ali s ograničenjima.**
-
-#### Opcija A: Heuristička detekcija (bez AI)
-
-**Prednosti:**
-- Brzo (lokalno, bez API poziva)
-- Besplatno
-- Radi offline
-
-**Nedostaci:**
-- Niska preciznost (~60-70%)
-- Ne može odrediti rod automatski
-- Propušta složena imena (npr. "Paul Atreides" vs "Paul")
-- Ne razlikuje likove od sporednih imena (gradovi, organizacije)
-
-**Implementacija:**
-Koristi regex za ekstrakciju capitalized words nakon točke ili u dijalogu, filtrira česte riječi (ne imena), vraća najčešća imena.
-
-#### Opcija B: AI-bazirana detekcija (preporučeno)
-
-**Prednosti:**
-- Visoka preciznost (~95%)
-- Može odrediti rod iz konteksta
-- Razlikuje likove od ostalih imena
-- Razumije kontekst (npr. "Dr. Smith" vs "Smith")
-
-**Nedostaci:**
-- Zahtijeva API poziv (troši token)
-- Sporije od heuristike
-
-**Implementacija:**
-Šalje se prvi poglavlje knjige na LLM s promptom: "Izdvoji sve likove iz teksta, odredi njihov rod i napiši kratki opis."
-
-### 16.3 Preporuka
-
-Za produkcijski sustav preporučuje se **Opcija B (AI-bazirana detekcija)** jer:
-- Preciznost je kritična za točan prijevod roda.
-- Jednom detektirani likovi spremaju se u `memorija.json` i koriste se za sve buduće prijevode.
-- Trošak API poziva je jednokratan (samo pri prvom čišćenju).
-
-### 16.4 Implementacija u Fazi 2
-
-Prilikom čišćenja tehničkog šuma (Faza 2), skripta može opcionalno pokrenuti AI detekciju likova:
-1. Čita prvi poglavlje `[fixed]` datoteke.
-2. Šalje na LLM s promptom za ekstrakciju likova.
-3. Automatski popunjava `CHARACTERS` sekciju u `memorija.json`.
-4. Korisnik može ručno doraditi ako treba.
+Preporuka: **Opcija B** — šalje se prvo poglavlje na LLM s promptom za ekstrakciju likova i roda, rezultat se automatski upisuje u `CHARACTERS` sekciju `memorija.json`.
 
 ---
 
 ## 17. .GITIGNORE SPECIFIKACIJA
 
-### 17.1 Princip
-
-Root direktorij projekta sadrži samo kod i globalnu konfiguraciju. Svi radni podaci su u `work/` direktoriju koji se **u potpunosti ignorira** u Git-u.
-
-### 17.2 Kompletni `.gitignore`
-
 ```gitignore
-# ============================================================
-# Python
-# ============================================================
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
 venv/
 env/
-ENV/
 .venv
-
-# ============================================================
-# Radni direktorij (svi podaci)
-# ============================================================
 work/
-
-# ============================================================
-# Virtualno okruženje
-# ============================================================
-venv/
-ENV/
-env/
-
-# ============================================================
-# IDE i editori
-# ============================================================
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# ============================================================
-# Logovi i privremene datoteke
-# ============================================================
 *.log
 *.tmp
 *.bak
-
-# ============================================================
-# OS specifično
-# ============================================================
+.vscode/
+.idea/
 Thumbs.db
 .DS_Store
-desktop.ini
+
+# API ključevi — NIKAD u Git
+.env
+.env.*
+!.env.example
 ```
 
-### 17.3 .gitkeep datoteke
+> **Bitno:** `.env.example` se **commita** kao predložak (s praznim vrijednostima) da novi korisnik zna koje ključeve treba postaviti.
 
-Za očuvanje strukture direktorija u Git-u (iako je `work/` ignoriran), koriste se `.gitkeep` datoteke u praznim direktorijima koji su dio koda:
-
-```
-config/
-├── .gitkeep
-├── profile_sf_literature.yaml
-├── profile_it_technical.yaml
-└── profile_general.yaml
-```
-
-### 17.4 Što se commita u Git
-
-- `main.py` — glavna skripta
-- `./start` — bootstrap skripta
-- `requirements.txt` — liste paketa
-- `.gitignore` — ignore pravila
-- `config/*.yaml` — globalni profili
-- `README.md` — dokumentacija (opcionalno)
-
-### 17.5 Što se NE commita u Git
-
-- `work/` — svi radni podaci (input, output, translated, audiobooks, state, logs)
-- `venv/` — virtualno okruženje
-- `__pycache__/` — Python cache
-- `*.log` — log datoteke
-- `*.mp3` — audio datoteke
+Što se commita: `main.py`, `app/*.py`, `./start`, `requirements.txt`, `.gitignore`, `.env.example`, `config/*.yaml`, `doc/`.
 
 ---
 
 ## 18. SIGURNOSNO RUKOVANJE GREŠKAMA
 
-### 18.1 Tipične greške i odgovor sustava
-
 | Greška | Uzrok | Reakcija |
 |---|---|---|
-| `HTTP 500` | LM Studio crash / OOM na GPU | Fallback na izvorni EN tekst + zapis checkpointa |
-| `Timeout` | Zagušenje VRAM-a (RTX 5080) | Retry 2x, pa fallback |
-| `ConnectionRefused` | LM Studio nije pokrenut | Poruka korisniku + povratak u izbornik |
-| `JSONDecodeError` | Koruptiran odgovor LLM-a | Čišćenje XML tagova + retry |
-| `FileNotFoundError` | Nedostaje `config/` ili `work/` | Auto-kreiranje direktorija |
-| `UnicodeDecodeError` | Sirovi PDF s čudnim encodingom | Fallback na `latin-1` pa retry |
-| `YAMLError` | Koruptiran `config.yaml` | Poruka korisniku + povratak u izbornik |
-
-### 18.2 Fallback lanac
-
-```
-1. Pokušaj 1 → API poziv
-2. Ako fail → Retry (2x s 5s delay)
-3. Ako i dalje fail → Pass-through (kopija EN teksta)
-4. Zapis u checkpoint + log u work/logs/
-5. Povratak u izbornik — korisnik može restartati LM Studio i nastaviti
-```
-
-### 18.3 Logiranje grešaka
-
-Sve greške se zapisuju u `work/logs/` s vremenskom oznakom, nazivom knjige, indeksom odlomka i tipom greške. Osnovni log (`*_debug.log`) uvijek je aktivan. Verbatim log (`*_verbatim.log`) samo ako je `LOG_VERBATIM=True`.
-
-### 18.4 Atomski zapis checkpointa
-
-Pri ažuriranju `translation_checkpoints.json` skripta koristi atomski zapis:
-1. Zapiše u privremenu datoteku `translation_checkpoints.json.tmp`.
-2. Koristi `os.replace()` za atomsku zamjenu.
-3. Ako se dogodi crash tijekom zapisa, originalna datoteka ostaje netaknuta.
+| `HTTP 500` | LM Studio crash | Fallback + zapis checkpointa |
+| `Timeout` | Zagušenje VRAM-a | Retry 2x, pa fallback |
+| `ConnectionRefused` | LM Studio nije pokrenut | Poruka + povratak u izbornik |
+| `JSONDecodeError` | Koruptiran LLM odgovor | Čišćenje tagova + retry |
+| `FileNotFoundError` | Nedostaje direktorij | Auto-kreiranje |
+| `UnicodeDecodeError` | Neobičan encoding | Fallback na `latin-1` |
+| `YAMLError` | Koruptiran YAML | Poruka + povratak u izbornik |
 
 ---
 
 ## 19. PROTOKOL SIGURNOG IZLAZA
 
-### 19.1 Tok
-
 ```
-Korisnik: X
-Sustav:   [UPOZORENJE] Pokrenuli ste izlaz iz aplikacije.
-          Trenutni rad u batchu bit će pauziran.
-          Jeste li sigurni da želite izaći? (Y/N):
+[X]  →  "Jeste li sigurni da želite izaći? (Y/N):"
+[Y]  →  Flush buffera → atomski checkpoint → zatvaranje HTTP sesija → sys.exit(0)
+[N]  →  Poništenje, povratak u izbornik
 ```
-
-### 19.2 Grananje
-
-**`Y` / `y`:**
-1. Flush svih otvorenih file buffera.
-2. Atomski zapis zadnjeg checkpointa u `work/state/translation_checkpoints.json`.
-3. Zatvaranje HTTP sesija prema LLM API-ju.
-4. `sys.exit(0)`.
-
-**`N` / `n` / bilo što drugo:**
-1. Poništenje izlaza.
-2. Osvježavanje glavnog izbornika.
-3. Nastavak rada bez gubitka stanja.
-
-### 19.3 Sigurnosne provjere
-
-Pri izlazu skripta provjerava:
-- Postoji li aktivan batch proces u tijeku?
-- Postoje li nespremljeni checkpointi?
-- Postoje li otvorene datoteke koje nisu zatvorene?
-
-Ako bilo što od navedenoga postoji, skripta prikazuje dodatno upozorenje i traži eksplicitnu potvrdu.
 
 ---
 
 ## 20. HEADER METAPODACI U PREVEDENOM TEKSTU
 
-### 20.1 Svrha
+### 20.1 Produkcijski prijevod — UVIJEK bez headera
 
-Svaki prevedeni tekst dobiva **header** s metapodacima o modelu, knjizi i vremenu nastanka. Ovo je kritično za:
-- **Verzionalnost:** korisnik zna koji model je korišten.
-- **Debug:** ako je prijevod loš, korisnik može provjeriti parametre.
-- **Audit:** tko, što, kada, kako.
+Produkcijska datoteka je **čisti prevedeni tekst i ništa više**. Razlog: datoteka se direktno šalje u TTS engine koji ju pretvara u MP3 audiobook. Header s tehničkim detaljima bi se čitao kao naracija — "Model: local-model, Temperature: nula point dvadeset pet..." — što je neprihvatljivo za audio iskustvo.
 
-### 20.2 Struktura headera
-
+**Primjer produkcijskog outputa** (`work/translated/Dune/Dune.txt`):
 ```
-================================================================================
-DYNAMIC BOOK TRANSLATOR & PARSER v4.3.0
-================================================================================
-Knjiga:        Dune
-Autor:         Frank Herbert
-Original:      Dune.epub
-================================================================================
-Model:         local-model
-Provider:      lm_studio
-Kvantizacija:  Q4_K_M (ako je dostupno)
-Temperature:   0.25
-Top-p:         0.80
-================================================================================
-Prijevod započet:  2026-07-30 14:22:11
-Prijevod završen:  2026-07-30 15:45:33
-Ukupno odlomaka:   2847
-================================================================================
+Paul je stajao na rubu pustinje, osjećajući pijesak ispod sandala...
 
-[POČETAK TEKSTA]
-Paul je stajao na rubu pustinje...
+Bila je to ona vrsta tišine koja prethodi oluji...
 ```
 
-### 20.3 Dinamičko dohvaćanje informacija o modelu
+### 20.2 Produkcijska statistička datoteka — opcionalno
 
-Skripta pokušava dohvatiti informacije o modelu od API-ja:
-- Za LM Studio: `GET /v1/models` vraća listu modela s detaljima.
-- Za OpenAI/Gemini/Qwen: API vraća model info u response headeru.
-- Ako nije dostupno, koristi se `DEFAULT_MODEL` iz konfiguracije.
+Ako korisnik želi metapodatke o produkcijskom prijevodu, oni se sprema u **zasebnu datoteku** koja se nikad ne šalje u TTS:
 
-### 20.4 Implementacija
+`work/translated/Dune/Dune_stats.txt`:
+```
+================================================================================
+PRODUKCIJSKI PRIJEVOD — Dynamic Book Translator v0.4.0
+================================================================================
+Knjiga:        Dune | Autor: Frank Herbert
+Model:         local-model | Provider: lm_studio
+Temperature:   0.25 | Top-p: 0.80 | Top-k: 15
+Granularnost:  Paragraf
+Ukupno:        2847 paragrafa | 187.543 riječi | 1.142.670 znakova
+Prosj. brzina: 38 tok/s
+Početak:       2026-07-31 11:00:00
+Kraj:          2026-07-31 14:22:11
+================================================================================
+```
 
-Header se generira automatski pri završetku prijevoda i sprema na vrh `work/translated/<Knjiga>/<Knjiga>.txt|md`. Sadrži:
-- Naziv i verzija skripte (iz `main.py` konfiguracije).
-- Podaci o knjizi (iz `config.yaml`).
-- Podaci o modelu (iz API-ja ili konfiguracije).
-- Vremenske oznake početka i završetka.
-- Ukupni broj odlomaka.
+### 20.3 Testni prijevod — header je OPCIJA
+
+Header u testnoj datoteci je **opcija** koja se uključuje/isključuje u OPCIJAMA izbornika. Default: uključen.
+
+Razlog zašto je za TEST koristan:
+- Korisnik uspoređuje prijevode različitih modela — header govori koji model je koji.
+- Vidljivi su parametri koji su korišteni za taj prijevod.
+- Brzina (tok/s) i trajanje pomažu pri odabiru optimalnog modela.
+
+**Format testnog headera** (vidi sekciju 13.3).
+
+---
+
+## 21. REFACTORING — MODULARNA ARHITEKTURA
+
+### 21.1 Princip
+
+`main.py` je **isključivo orkestrator** — importa module iz `app/` i koordinira tok izvršavanja. Nema logike u `main.py` — samo pozivi metoda iz modula.
+
+### 21.2 Moduli u `app/`
+
+| Modul | Odgovornost |
+|---|---|
+| `config_loader.py` | Učitavanje i spajanje YAML konfiguracije |
+| `menu.py` | CLI izbornici s kursorskom navigacijom (↑↓ + Enter/Space + X) |
+| `document_processor.py` | Faza 1: parsiranje dokumenata (PDF, EPUB, DOCX, MOBI, TXT) |
+| `text_cleaner.py` | Faza 2: čišćenje headera/footera, kreiranje `[fixed]` i `memorija.json` |
+| `translator.py` | Faza 3: LLM prijevod (odlomak, paragraf, rečenica; TEST i produkcija) |
+| `tts_engine.py` | Faza 4: TTS sinteza, generiranje MP3 s ID3 tagovima |
+| `file_manager.py` | Unificirana metoda za direktorije, datoteke i suffix-increment |
+| `checkpoint.py` | Multi-checkpoint perzistencija, atomski zapis |
+| `logger.py` | Trorazinsko logiranje |
+| `utils.py` | Sanitizacija naziva, progress bar, detekcija X tipke, čišćenje ekrana |
+
+### 21.3 Pravilo bez duplikacija
+
+Svaka funkcionalnost postoji **na jednom mjestu**:
+- Kreiranje direktorija i suffix-increment → isključivo `file_manager.py`
+- API pozivi → isključivo `translator.py`
+- Sve navigacijske rutine → isključivo `menu.py`
+
+Kod koji radi identičan posao **mora** biti u zajedničkoj metodi s parametrima, ne kopiran.
+
+### 21.4 Primjer: `main.py` struktura
+
+```python
+# main.py — isključivo orkestracija
+from app.config_loader import load_global_config
+from app.menu import MainMenu
+from app.document_processor import DocumentProcessor
+from app.text_cleaner import TextCleaner
+from app.translator import Translator
+from app.tts_engine import TTSEngine
+from app.checkpoint import CheckpointManager
+from app.logger import setup_logging
+from app.file_manager import FileManager
+
+def main():
+    config = load_global_config()
+    setup_logging(config)
+    fm = FileManager(config)
+    fm.ensure_directories()
+    
+    checkpoint_mgr = CheckpointManager(config)
+    menu = MainMenu(config, checkpoint_mgr)
+    
+    while True:
+        action = menu.show_main()
+        if action == "exit":
+            break
+        elif action == "test":
+            Translator(config, fm).run_test(menu.last_test)
+        elif action == "phase1":
+            DocumentProcessor(config, fm).run(menu.selection)
+        elif action == "phase2":
+            TextCleaner(config, fm).run(menu.selection)
+        elif action == "phase3":
+            Translator(config, fm).run_full(menu.selection)
+        elif action == "phase4":
+            TTSEngine(config, fm).run(menu.selection)
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## 22. UPRAVLJANJE DIREKTORIJIMA I DATOTEKAMA — UNIFICIRANA METODA
+
+### 22.1 Svrha
+
+Sva logika kreiranja direktorija, detekcije postojanja i suffix-incrementa je u **jednoj metodi** u `app/file_manager.py`. Parametri definiraju što se kreira i gdje.
+
+### 22.2 API metode `FileManager`
+
+```python
+class FileManager:
+    def ensure_dir(self, dir_path: str, suffix_if_exists: bool = False) -> str:
+        """Kreira direktorij. Ako postoji i suffix_if_exists=True,
+        dodaje suffix _001, _002... Vraća finalnu putanju."""
+    
+    def ensure_file_path(self, file_path: str, suffix_if_exists: bool = False) -> str:
+        """Generira sigurnu putanju za datoteku.
+        Ako postoji i suffix_if_exists=True, dodaje (001), (002)..."""
+    
+    def ensure_directories(self) -> None:
+        """Kreira sve potrebne direktorije iz konfiguracije pri pokretanju."""
+    
+    def book_output_dir(self, book_title: str, author: str) -> str:
+        """Vraća putanju work/translated/<sanitized_title>---<sanitized_author>.
+        Automatski dodaje suffix ako postoji."""
+    
+    def audiobook_dir(self, book_title: str, author: str) -> str:
+        """Isto kao book_output_dir ali za work/audiobooks/."""
+```
+
+### 22.3 Suffix format
+
+- Direktoriji: `foundation---isaac-asimov`, `foundation---isaac-asimov_001`, `_002`...
+- Datoteke: `Dune.txt`, `Dune(001).txt`, `Dune(002).txt`...
+
+Prefiks se uvijek oblikuje s 3 znamenke (`%03d`).
+
+---
+
+## 23. MP3 IMENOVANJE I METAPODACI
+
+### 23.1 Format naziva
+
+```
+001_Ch01_part001.mp3   ← globalni redni broj + poglavlje + dio poglavlja
+002_Ch02_part001.mp3
+003_Ch02_part002.mp3
+004_Ch02_part003.mp3
+005_Ch03_part001.mp3
+```
+
+### 23.2 ID3 metapodaci (via `mutagen`)
+
+| Tag | Vrijednost |
+|---|---|
+| `TPE1` (Artist) | Autor knjige |
+| `TALB` (Album) | Naslov knjige |
+| `TIT2` (Title) | `Chapter X — Part Y` |
+| `TRCK` (Track) | Globalni redni broj (001, 002...) |
+| `COMM` (Comment) | `Generated by Dynamic Book Translator v0.4.0` |
+
+### 23.3 Izlazni direktorij
+
+MP3 se sprema u `work/audiobooks/<naslov-autor>/`. Ako direktorij postoji → suffix `_001`, `_002`... putem `FileManager.audiobook_dir()`.
 
 ---
 
 ## KRAJ DOKUMENTACIJE
 
-Ovo je kompletna tehnička specifikacija sustava **DYNAMIC BOOK TRANSLATOR & PARSER V4.3-PRO**. Dokument pokriva:
+Ovo je kompletna tehnička specifikacija sustava **DYNAMIC BOOK TRANSLATOR & PARSER V0.4**. Dokument pokriva:
 
-- ✅ Strukturu direktorija s `work/` izolacijom
-- ✅ YAML konfiguraciju s multi-line promptovima
-- ✅ Per-book direktorije s memorijom vezanom za `[fixed]` datoteke
+- ✅ Modularnu arhitekturu (`app/` direktorij)
+- ✅ Isključivo YAML konfiguraciju (nema hardkodiranih vrijednosti u kodu)
+- ✅ API ključevi isključivo u `.env` (`.gitignore` zaštićeno)
+- ✅ CLI "GUI" s kursorskom navigacijom (↑↓ + Enter/Space + X)
+- ✅ TEST sustav s opcionalnim headerom (DA/NE u OPCIJAMA) — testna datoteka s timestampom
+- ✅ Produkcijski prijevod — uvijek čisti tekst bez headera (spreman za TTS→MP3)
+- ✅ OPCIJE izbornik s dropdown granularnosti (odlomak/paragraf/rečenica)
+- ✅ Per-book direktorije s memorijom (CHARACTERS + GLOSSARY + GRAMMAR_FIXES)
+- ✅ Multi-checkpoint s 1-click nastavkom iz glavnog izbornika
+- ✅ Unificiranu metodu za direktorije i suffix-increment (`FileManager`)
+- ✅ MP3 imenovanje (`001_Ch01_part001.mp3`) s ID3 metapodacima
 - ✅ Batch processing u svim fazama
-- ✅ MP3 po paragrafima u direktoriju knjige
-- ✅ Multi-checkpoint perzistenciju
-- ✅ 1-Click test sustav
-- ✅ Trorazinsko logiranje s formatiranim headerom
-- ✅ Vanjski API integraciju (LM Studio, OpenAI, Gemini, Qwen)
-- ✅ Automatsku detekciju likova (AI-bazirana preporuka)
-- ✅ `.gitignore` specifikaciju
-- ✅ Sigurnosno rukovanje greškama
-- ✅ Protokol sigurnog izlaza
-- ✅ Header metapodatke u prevedenom tekstu
+- ✅ Lokalni LM Studio + lokalni Ollama + Ollama cloud + OpenAI + Gemini + Qwen + Custom
+- ✅ Trorazinsko logiranje
+- ✅ Sigurnosno rukovanje greškama i protokol izlaza
 
-**Sljedeći korak:** Implementacija Python koda (`main.py`, `./start`, `requirements.txt`, primjeri YAML konfiguracija).
-
+**Sljedeći korak:** Implementacija refactoringa — kreiranje `app/` strukture i migracija koda iz `mamba_voice.py`.
