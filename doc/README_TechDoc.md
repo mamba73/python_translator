@@ -103,7 +103,12 @@ python-dotenv>=1.0.0
 
 ### 3.1 Princip organizacije
 
-Root direktorij projekta sadrži **isključivo kod i globalnu konfiguraciju**. Svi radni direktoriji smješteni su unutar `work/` direktorija. Python moduli su isključivo unutar `app/` direktorija.
+Root direktorij projekta sadrži **isključivo ulaznu točku (`main.py`, `./start`), konfiguraciju i dokumentaciju**. Svi Python moduli potrebni za rad aplikacije nalaze se u `app/` direktoriju. Svi radni direktoriji (ulaz, izlaz, prijevodi, audio, stanje, logovi) smješteni su unutar `work/` direktorija.
+
+- `app/` — sve Python skripte i moduli potrebni za rad aplikacije
+- `config/` — isključivo YAML datoteke (globalne postavke i predlošci profila)
+- `work/` — svi radni podaci, potpuno ignoriran u `.gitignore`
+- `main.py` — jedina ulazna točka, importa module iz `app/`, ne sadrži poslovnu logiku
 
 ### 3.2 Kompletna struktura
 
@@ -160,10 +165,10 @@ project_root/
 
 ### 3.3 Ključna pravila strukture
 
-- `app/` — isključivo Python moduli, nema konfiga ni podataka.
+- `app/` — sve Python skripte i moduli za rad aplikacije; nema konfiga ni podataka.
 - `config/` — isključivo YAML datoteke; nema hardkodiranih vrijednosti u kodu.
 - `work/` — svi radni podaci, potpuno ignoriran u `.gitignore`.
-- `main.py` — jedina ulazna točka koja importa module iz `app/`.
+- `main.py` — jedina ulazna točka; importa module iz `app/`, ne sadrži poslovnu logiku.
 
 ---
 
@@ -333,34 +338,51 @@ def merge_config(global_cfg: dict, book_cfg: dict) -> dict:
 ```
 [GLAVNI IZBORNIK]
 │
-├── [Aktivni checkpointi]  ← dinamički blok, prikazuje se samo ako postoje nedovršeni prijevodi
+├── [Aktivni checkpointi]  ← blok vidljiv samo ako postoje nedovršeni prijevodi
 │   ├── Ukupno nedovršenih: N prijevoda
-│   ├── [1] Nastavi: Dune (Frank Herbert) — 26.31%  [↵ 1-click nastavak]
+│   ├── [1] Nastavi: Dune (Frank Herbert) — 26.31%  [749/2847 par.]
 │   ├── [2] Nastavi: Foundation (Isaac Asimov) — 71.01%
 │   └── ...
 │
 ├── [Y] BRZI TEST: Dune — 2 paragrafa  ← samo ako postoji last_test.json
-│       (Model: local-model | Paragraf | Header: DA)
+│       (Model: local-model | Paragraf ×2 | Header: DA)
 │
 ├── [1] Konverzija dokumenata → TXT/MD
+│   └── [X] Povratak
 │
 ├── [2] Čišćenje tehničkog šuma ([fixed]) + memorija
+│   └── [X] Povratak
 │
 ├── [3] Prevođenje (LLM)
-│   ├── [1] Napravi testni prevod       ← BRZI TEST (granularnost iz OPCIJA)
+│   │   ── Trenutne postavke: Paragraf ×1 | Header: DA ──
+│   ├── [1] Napravi testni prevod
+│   │   ├── Odabir datoteke [fixed]
+│   │   ├── Unesi broj segmenata (default: 1): _
+│   │   └── [X] Povratak
 │   ├── [2] Prevedi cijelu knjigu
-│   └── [0] Opcije
-│       ├── [1] Header u testnoj datoteci:  [DA ▼] / [NE ▼]
-│       ├── [2] Granularnost segmenata:     [Paragraf ▼] / [Odlomak ▼] / [Rečenica ▼]
-│       └── [X] Povratak
+│   │   └── [X] Povratak
+│   ├── [0] Opcije
+│   │   ├── [1] Header u testnoj datoteci:  [DA  ▼]
+│   │   ├── [2] Granularnost segmenata:     [Paragraf ▼]
+│   │   ├── [3] Količina (default):         1
+│   │   └── [X] Povratak
+│   └── [X] Povratak
 │
 ├── [4] TTS sinteza → MP3
 │   ├── [1] Zasebne datoteke po odlomcima (001_Ch01_part001.mp3...)
-│   └── [2] Jedna datoteka za cijelu knjigu
+│   ├── [2] Jedna datoteka za cijelu knjigu
+│   └── [X] Povratak
 │
 └── [X] Izlaz
     └── "Jeste li sigurni? (Y/N)"
 ```
+
+**Notifikacijska linija u `[3] Prevođenje`:**  
+Ispod naslova podizbornika uvijek je vidljiv trenutni status OPCIJA:
+```
+── Trenutne postavke: Granularnost: Paragraf | Količina: 1 | Header: DA ──
+```
+Ova linija se osvježava u realnom vremenu pri promjeni OPCIJA.
 
 ### 6.3 Batch odabir
 
@@ -446,28 +468,14 @@ Korisnik može ručno popuniti memoriju prije Faze 3.
 
 ### 9.2 Granularnost — OPCIJE (zajedničke za TEST i produkciju)
 
-Granularnost definira kako se tekst šalje AI modelu. Postavlja se u OPCIJAMA izbornika `[3] → [0] Opcije`:
+Granularnost definira kako se tekst šalje AI modelu. Postavlja se u `[3] Prevođenje → [0] Opcije`. Potpuni opis OPCIJA izbornika: **sekcija 13.5**.
 
-```
-OPCIJE — Prevođenje:
-  ┌─────────────────────────────────────────────┐
-  │ [1] Header u testnoj datoteci:   [DA  ▼]   │
-  │ [2] Granularnost segmenata:      [Paragraf ▼]│
-  │                                             │
-  │ [X] Povratak                                │
-  └─────────────────────────────────────────────┘
-```
-
-- Obje opcije su CLI dropdown (kursorske tipke ↑↓ za odabir vrijednosti).
-- Promjena se **odmah primjenjuje** i prikazuje u svim prikaze (živi preview).
-- Vrijednosti se sprema u `config/settings.yaml` (`translation.test_header`, `translation.granularity`).
+Granularnost vrijedi jednako za TEST i za produkcijski prijevod — u oba slučaja se tekst segmentira i šalje AI-u na isti način.
 
 **Dostupne granularnosti:**
-- **Odlomak** — chunk od ~1500 tokena (više paragrafa zajedno)
-- **Paragraf** — jedan `\n\n` blok
-- **Rečenica** — jedna rečenica (najsporije, ali najkvalitetnije)
-
-**Default vrijednosti** (ako nema zapisa u konfiguraciji): Paragraf, 1 komad, Header: DA.
+- **Odlomak** — chunk od ~1500 tokena
+- **Paragraf** — jedan `\n\n` blok  
+- **Rečenica** — jedna rečenica (najsporije, najkvalitetnije)
 
 ### 9.3 TEST prijevod — tijek i izlaz
 
@@ -702,27 +710,16 @@ Odabir numeričke opcije iz ovog bloka **odmah nastavlja prijevod** — bez doda
 
 ### 13.1 Svrha
 
-Brzi testni prijevod za provjeru kvalitete modela i parametara. Podržava tri razine granularnosti jer je ponekad potreban tekst kraći od odlomka:
+Brzi testni prijevod za provjeru kvalitete modela i parametara bez pokretanja punog prijevoda. Razlika TEST vs. PRODUKCIJA detaljno je opisana u **sekciji 9.1**.
 
-- **Odlomak** — chunk od ~1500 tokena (više paragrafa zajedno)
-- **Paragraf** — jedan `\n\n` blok
-- **Rečenica** — jedna rečenica
+Ključna točka: granularnost (odlomak/paragraf/rečenica) + količina definiraju se jednom u OPCIJAMA i vrijede za oba moda.
 
-### 13.2 Ključne razlike TEST vs. PRODUKCIJA
+### 13.2 Format testne datoteke
 
-| | TEST | PRODUKCIJA |
-|---|---|---|
-| **Header** | OPCIJA — DA ili NE (default: DA) | NIKAD — čisti tekst za TTS |
-| **Statistička datoteka** | U samom headeru (ako uključen) | Zasebna `_stats.txt` datoteka (opcionalno) |
-| **Naziv datoteke** | `<naziv>_test_<timestamp>.txt` | `<naziv>.txt` |
-| **Checkpoint** | NE (kratka obrada) | DA — nastavak nakon prekida |
+Naziv: `<originalni_naziv>_test_<timestamp>.txt`  
+Primjer: `Dune_test_2026-07-31_110820.txt`
 
-> **Zašto je produkcija uvijek čista?**  
-> Produkcijska `.txt` datoteka se direktno provlači kroz TTS i pretvara u MP3. Header s tehničkim detaljima u audiobuku ne smije postojati — slušatelj bi čuo "Model: local-model | Temperature: 0.25...".
-
-### 13.3 Header u testnoj datoteci
-
-Ako je uključen (opcija u OPCIJAMA), testna datoteka sadrži:
+**Header (ako je uključen u OPCIJAMA):**
 
 ```
 ================================================================================
@@ -746,7 +743,7 @@ Trajanje:      0m 45s
 Paul je stajao na rubu pustinje...
 ```
 
-### 13.4 BRZI TEST u glavnom izborniku
+### 13.3 BRZI TEST u glavnom izborniku
 
 ```
 ╔══════════════════════════════════════════════════════════╗
@@ -757,8 +754,8 @@ Paul je stajao na rubu pustinje...
 ║  [1] ▶ Nastavi: Dune (Frank Herbert) ........... 26.31% ║
 ║  [2] ▶ Nastavi: Foundation (Asimov) ............ 71.01% ║
 ║                                                          ║
-║  [Y] BRZI TEST: Dune — 2 paragrafa                      ║
-║       Model: local-model | Paragraf | Header: DA         ║
+║  [Y] BRZI TEST: Dune — Paragraf ×2 | Header: DA         ║
+║       Model: local-model | lm_studio                     ║
 ║                                                          ║
 ║  [1] Konverzija dokumenata → TXT/MD                      ║
 ║  [2] Čišćenje tehničkog šuma + memorija                  ║
@@ -768,34 +765,55 @@ Paul je stajao na rubu pustinje...
 ╚══════════════════════════════════════════════════════════╝
 ```
 
-- Blok nedovršenih prijevoda prikazuje se samo ako postoje checkpointi.
-- Svaki checkpoint je 1-click nastavak — odabir brojke odmah nastavlja prijevod.
-- `[Y]` ponavlja zadnji test s istim parametrima — 1-click pokretanje.
+- `[Y]` ponavlja zadnji test s istim parametrima iz `last_test.json` — bez ikakvog unosa.
+- Blok nedovršenih prijevoda prikazuje se samo ako postoje checkpointi (vidi sekciju 12).
+
+### 13.4 Podizbornik "Napravi testni prevod"
+
+```
+[3] → [1] Napravi testni prevod
+  ── Granularnost: Paragraf | Količina: 1 | Header: DA ──
+
+  Odaberi datoteku:
+    [1] Dune [fixed].txt
+    [2] Foundation [fixed].txt
+    [X] Povratak
+
+  > Odabrana datoteka: Dune [fixed].txt
+  > Unesi broj segmenata (Paragraf, default 1): _
+```
+
+- Nakon unosa broja — prijevod se pokreće odmah.
+- Rezultat se sprema u `work/translated/Dune/Dune_test_<timestamp>.txt`.
+- Parametri se sprema u `last_test.json`.
 
 ### 13.5 OPCIJE izbornik
 
 ```
-╔══════════════════════════════════════════════════╗
-║  OPCIJE — Prevođenje                             ║
-╠══════════════════════════════════════════════════╣
-║                                                  ║
-║  [1] Header u testnoj datoteci:                  ║
-║      ● DA                                        ║
-║      ○ NE                                        ║
-║                                                  ║
-║  [2] Granularnost segmenata:                     ║
-║      ○ Odlomak  (~1500 tokena)                   ║
-║      ● Paragraf (jedan \\n\\n blok)              ║
-║      ○ Rečenica                                  ║
-║                                                  ║
-║  [X] Povratak                                    ║
-╚══════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════╗
+║  OPCIJE — Prevođenje                         ║
+╠══════════════════════════════════════════════╣
+║                                              ║
+║  [1] Header u testnoj datoteci:              ║
+║      ● DA                                    ║
+║      ○ NE                                    ║
+║                                              ║
+║  [2] Granularnost segmenata:                 ║
+║      ○ Odlomak  (~1500 tokena)               ║
+║      ● Paragraf (jedan \\n\\n blok)          ║
+║      ○ Rečenica                              ║
+║                                              ║
+║  [3] Količina (default za testni prevod): 1  ║
+║      > Unesi broj: _                         ║
+║                                              ║
+║  [X] Povratak                                ║
+╚══════════════════════════════════════════════╝
 ```
 
-- Kretanje: ↑↓ kursorske tipke.
-- Odabir: Enter ili Razmaknica.
-- Promjena se odmah odražava u prikazu glavnog izbornika (BRZI TEST linija).
-- Vrijednosti se atomski sprema u `config/settings.yaml`.
+- Kretanje: ↑↓ kursorske tipke; odabir: Enter ili Razmaknica.
+- `[1]` i `[2]` su CLI dropdowni — promjena se odmah reflektira u notifikacijskoj liniji izbornika `[3]`.
+- `[3]` je numerički unos — postavlja defaultnu količinu za BRZI TEST (`Y`).
+- Vrijednosti se atomski sprema u `config/settings.yaml` (`translation.test_header`, `translation.granularity`, `translation.default_count`).
 
 ---
 
@@ -975,49 +993,18 @@ Thumbs.db
 
 ---
 
-## 20. HEADER METAPODACI U PREVEDENOM TEKSTU
+## 20. IZLAZNE DATOTEKE PRIJEVODA — SAŽETAK
 
-### 20.1 Produkcijski prijevod — UVIJEK bez headera
+Sve o formatu, headeru i sadržaju izlaznih datoteka opisano je u:
+- **Sekcija 9.1** — tablica razlika TEST vs. PRODUKCIJA
+- **Sekcija 9.3** — tijek i izlaz testnog prijevoda (s primjerom headera)
+- **Sekcija 9.5** — tijek produkcijskog prijevoda (čisti tekst + opcionalna `_stats.txt`)
+- **Sekcija 13.2** — format naziva testne datoteke i primjer headera
 
-Produkcijska datoteka je **čisti prevedeni tekst i ništa više**. Razlog: datoteka se direktno šalje u TTS engine koji ju pretvara u MP3 audiobook. Header s tehničkim detaljima bi se čitao kao naracija — "Model: local-model, Temperature: nula point dvadeset pet..." — što je neprihvatljivo za audio iskustvo.
-
-**Primjer produkcijskog outputa** (`work/translated/Dune/Dune.txt`):
-```
-Paul je stajao na rubu pustinje, osjećajući pijesak ispod sandala...
-
-Bila je to ona vrsta tišine koja prethodi oluji...
-```
-
-### 20.2 Produkcijska statistička datoteka — opcionalno
-
-Ako korisnik želi metapodatke o produkcijskom prijevodu, oni se sprema u **zasebnu datoteku** koja se nikad ne šalje u TTS:
-
-`work/translated/Dune/Dune_stats.txt`:
-```
-================================================================================
-PRODUKCIJSKI PRIJEVOD — Dynamic Book Translator v0.4.0
-================================================================================
-Knjiga:        Dune | Autor: Frank Herbert
-Model:         local-model | Provider: lm_studio
-Temperature:   0.25 | Top-p: 0.80 | Top-k: 15
-Granularnost:  Paragraf
-Ukupno:        2847 paragrafa | 187.543 riječi | 1.142.670 znakova
-Prosj. brzina: 38 tok/s
-Početak:       2026-07-31 11:00:00
-Kraj:          2026-07-31 14:22:11
-================================================================================
-```
-
-### 20.3 Testni prijevod — header je OPCIJA
-
-Header u testnoj datoteci je **opcija** koja se uključuje/isključuje u OPCIJAMA izbornika. Default: uključen.
-
-Razlog zašto je za TEST koristan:
-- Korisnik uspoređuje prijevode različitih modela — header govori koji model je koji.
-- Vidljivi su parametri koji su korišteni za taj prijevod.
-- Brzina (tok/s) i trajanje pomažu pri odabiru optimalnog modela.
-
-**Format testnog headera** (vidi sekciju 13.3).
+**Kratki sažetak:**
+- Produkcija → `<naziv>.txt` — **uvijek čisti tekst**, bez headera, direktan ulaz za TTS.
+- Test → `<naziv>_test_<timestamp>.txt` — header je opcija (DA/NE u OPCIJAMA).
+- Statistike produkcije → `<naziv>_stats.txt` — zasebna datoteka, opcionalno.
 
 ---
 
