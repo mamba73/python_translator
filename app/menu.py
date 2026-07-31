@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sys
 import logging
+import os
 from typing import Any, Callable, Optional
 from pathlib import Path
 
@@ -26,6 +27,151 @@ else:
 
 from app.utils import ocisti_ekran
 from app.checkpoint import CheckpointManager
+
+
+class CursorMenu:
+    """Kursorska navigacija za izbornike."""
+
+    @staticmethod
+    def odabir_iz_liste(opcije: list[str], naslov: str = "", allow_y: bool = False,
+                        allow_r: bool = False) -> str:
+        """Kursorski odabir iz liste (↑↓ + Enter/Space).
+
+        Args:
+            opcije: Lista opcija za prikaz.
+            naslov: Naslov za prikaz.
+            allow_y: Dozvoli Y kao odgovor.
+            allow_r: Dozvoli R kao odgovor.
+
+        Returns:
+            Odabir korisnika.
+        """
+        if sys.platform == "win32" and _MSVCRT_AVAILABLE:
+            return CursorMenu._odabir_windows(opcije, naslov, allow_y, allow_r)
+        elif _CURSES_AVAILABLE:
+            return CursorMenu._odabir_linux(opcije, naslov, allow_y, allow_r)
+        else:
+            # Fallback na input()
+            return CursorMenu._odabir_fallback(opcije, naslov, allow_y, allow_r)
+
+    @staticmethod
+    def _odabir_windows(opcije: list[str], naslov: str, allow_y: bool, allow_r: bool) -> str:
+        """Windows kursorski odabir koristeći msvcrt."""
+        trenutni = 0
+
+        while True:
+            ocisti_ekran()
+            if naslov:
+                print(naslov)
+                print()
+
+            for i, opc in enumerate(opcije):
+                if i == trenutni:
+                    print(f"> {opc} <")
+                else:
+                    print(f"  {opc}")
+
+            print()
+            if allow_y:
+                print("[Y] - BRZI TEST")
+            if allow_r:
+                print("[R] - Nastavi od checkpointa")
+            print("[X] - Izlaz")
+
+            # Čekaj tipku
+            while True:
+                if msvcrt.kbhit():
+                    key = msvcrt.getch()
+                    if key == b'\xe0':  # Extended key (arrows)
+                        key = msvcrt.getch()
+                        if key == b'H':  # Up
+                            trenutni = (trenutni - 1) % len(opcije)
+                            break
+                        elif key == b'P':  # Down
+                            trenutni = (trenutni + 1) % len(opcije)
+                            break
+                    elif key in (b'\r', b' '):  # Enter or Space
+                        return str(trenutni + 1)
+                    elif key == b'x':
+                        return "x"
+                    elif key == b'y' and allow_y:
+                        return "y"
+                    elif key == b'r' and allow_r:
+                        return "r"
+
+    @staticmethod
+    def _odabir_linux(opcije: list[str], naslov: str, allow_y: bool, allow_r: bool) -> str:
+        """Linux kursorski odabir koristeći curses."""
+        def wrapper(stdscr):
+            curses.curs_set(0)
+            stdscr.keypad(True)
+            trenutni = 0
+
+            while True:
+                stdscr.clear()
+                if naslov:
+                    stdscr.addstr(naslov + "\n\n")
+
+                for i, opc in enumerate(opcije):
+                    if i == trenutni:
+                        stdscr.addstr(f"> {opc} <\n")
+                    else:
+                        stdscr.addstr(f"  {opc}\n")
+
+                stdscr.addstr("\n")
+                if allow_y:
+                    stdscr.addstr("[Y] - BRZI TEST\n")
+                if allow_r:
+                    stdscr.addstr("[R] - Nastavi od checkpointa\n")
+                stdscr.addstr("[X] - Izlaz\n")
+
+                stdscr.refresh()
+
+                key = stdscr.getch()
+                if key == curses.KEY_UP:
+                    trenutni = (trenutni - 1) % len(opcije)
+                elif key == curses.KEY_DOWN:
+                    trenutni = (trenutni + 1) % len(opcije)
+                elif key in (curses.KEY_ENTER, 10, 32):
+                    return str(trenutni + 1)
+                elif key == ord('x'):
+                    return "x"
+                elif key == ord('y') and allow_y:
+                    return "y"
+                elif key == ord('r') and allow_r:
+                    return "r"
+
+        return curses.wrapper(wrapper)
+
+    @staticmethod
+    def _odabir_fallback(opcije: list[str], naslov: str, allow_y: bool, allow_r: bool) -> str:
+        """Fallback na input() ako kursorska navigacija nije dostupna."""
+        if naslov:
+            print(naslov)
+            print()
+
+        for i, opc in enumerate(opcije, 1):
+            print(f"  {i}. {opc}")
+        print()
+
+        if allow_y:
+            print("[Y] - BRZI TEST")
+        if allow_r:
+            print("[R] - Nastavi od checkpointa")
+        print("[X] - Izlaz")
+
+        while True:
+            odgovor = input("Odabir: ").strip().lower()
+            if odgovor == "x":
+                return "x"
+            if odgovor == "y" and allow_y:
+                return "y"
+            if odgovor == "r" and allow_r:
+                return "r"
+            if odgovor.isdigit():
+                idx = int(odgovor) - 1
+                if 0 <= idx < len(opcije):
+                    return str(idx + 1)
 
 
 class Menu:
@@ -48,7 +194,7 @@ class Menu:
         """Pokreće glavni izbornik."""
         while True:
             odabir = self.show_main()
-            if odabir == "exit":
+            if odabir == "exit" or odabir == "x":
                 if self._potvrda_izlaza():
                     break
             elif odabir == "test":
@@ -110,7 +256,9 @@ class Menu:
             "X. Izlaz"
         ]
 
-        odabir = self._odabir_iz_liste(opcije, allow_y=last_test is not None, allow_r=len(checkpointi) > 0)
+        odabir = CursorMenu.odabir_iz_liste(opcije, "Dynamic Book Translator v0.4.0",
+                                            allow_y=last_test is not None,
+                                            allow_r=len(checkpointi) > 0)
 
         if odabir == "r" and len(checkpointi) > 0:
             # Odabir checkpointa za nastavak
@@ -138,17 +286,25 @@ class Menu:
             input("Pritisnite Enter za povratak...")
             return
 
-        # Pronađi datoteke
-        datoteke = list(input_dir.glob("*.*"))
-        datoteke = [d for d in datoteke if d.is_file() and not d.name.startswith(".")]
+        # Pronađi datoteke rekurzivno s metadatima
+        datoteke_info = self._pronadi_datoteke_s_metadatima(input_dir)
 
-        if not datoteke:
-            print("Nema datoteka u work/input/")
+        if not datoteke_info:
+            print("Nema datoteka u work/input/ (uključujući poddirektorije).")
             input("Pritisnite Enter za povratak...")
             return
 
+        # Prikaz s metadatima
+        print(f"Pronađeno: {len(datoteke_info)} datoteka\n")
+        for i, info in enumerate(datoteke_info, 1):
+            rel_path = info["path"].relative_to(input_dir)
+            print(f"  {i}. [{info['type']}] {rel_path} ({info['size']})")
+
         # Batch odabir
-        odabrane = self._batch_odabir([d.name for d in datoteke], "Odaberite datoteke za konverziju")
+        odabrane = self._batch_odabir([str(info["path"].relative_to(input_dir)) for info in datoteke_info], "Odaberite datoteke za konverziju (ili X za povratak)")
+
+        if odabrane == "x":
+            return
 
         if not odabrane:
             print("Nije odabrana nijedna datoteka.")
@@ -186,7 +342,10 @@ class Menu:
             return
 
         # Batch odabir
-        odabrane = self._batch_odabir([d.name for d in knjige], "Odaberite knjige za čišćenje")
+        odabrane = self._batch_odabir([d.name for d in knjige], "Odaberite knjige za čišćenje (ili X za povratak)")
+
+        if odabrane == "x":
+            return
 
         if not odabrane:
             print("Nije odabrana nijedna knjiga.")
@@ -224,7 +383,7 @@ class Menu:
                 "X. Povratak"
             ]
 
-            odabir = self._odabir_iz_liste(opcije)
+            odabir = CursorMenu.odabir_iz_liste(opcije, "FAZA 3 — PREVOĐENJE")
 
             if odabir == "x":
                 break
@@ -251,7 +410,7 @@ class Menu:
                 "X. Povratak"
             ]
 
-            odabir = self._odabir_iz_liste(opcije)
+            odabir = CursorMenu.odabir_iz_liste(opcije, "OPCIJE PREVOĐENJA")
 
             if odabir == "x":
                 break
@@ -286,7 +445,7 @@ class Menu:
             "X. Povratak"
         ]
 
-        odabir = self._odabir_iz_liste(opcije)
+        odabir = CursorMenu.odabir_iz_liste(opcije, "FAZA 4 — TTS SINTEZA")
 
         if odabir == "x":
             return
@@ -299,44 +458,56 @@ class Menu:
     # Pomoćne metode
     # -----------------------------------------------------------------------
 
-    def _odabir_iz_liste(self, opcije: list[str], allow_y: bool = False,
-                        allow_r: bool = False) -> str:
-        """Jednostavan odabir iz liste (brojevi + Y/R/X).
+    def _pronadi_datoteke_s_metadatima(self, dir_path: Path) -> list[dict[str, Any]]:
+        """Pronalazi datoteke rekurzivno s metadatima o tipu.
 
         Args:
-            opcije: Lista opcija za prikaz.
-            allow_y: Dozvoli Y kao odgovor.
-            allow_r: Dozvoli R kao odgovor.
+            dir_path: Početni direktorij za pretragu.
 
         Returns:
-            Odabir korisnika.
+            Lista rječnika s path, type, size.
         """
-        for opc in opcije:
-            print(f"  {opc}")
-        print()
+        datoteke_info = []
+        supported_exts = {
+            '.pdf': 'PDF',
+            '.docx': 'DOCX',
+            '.doc': 'DOC',
+            '.epub': 'EPUB',
+            '.mobi': 'MOBI',
+            '.txt': 'TXT'
+        }
 
-        while True:
-            odgovor = input("Odabir: ").strip().lower()
-            if odgovor == "x":
-                return "x"
-            if odgovor == "y" and allow_y:
-                return "y"
-            if odgovor == "r" and allow_r:
-                return "r"
-            if odgovor.isdigit():
-                idx = int(odgovor) - 1
-                if 0 <= idx < len(opcije):
-                    return str(idx + 1)
+        for path in dir_path.rglob("*"):
+            if path.is_file() and not path.name.startswith("."):
+                ext = path.suffix.lower()
+                file_type = supported_exts.get(ext, ext.upper().replace(".", ""))
 
-    def _batch_odabir(self, stavke: list[str], naslov: str) -> list[int]:
-        """Batch odabir: 1, 1,3,5, 1-5, *.
+                # Format veličine
+                size_bytes = path.stat().st_size
+                if size_bytes < 1024:
+                    size_str = f"{size_bytes} B"
+                elif size_bytes < 1024 * 1024:
+                    size_str = f"{size_bytes / 1024:.1f} KB"
+                else:
+                    size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+
+                datoteke_info.append({
+                    "path": path,
+                    "type": file_type,
+                    "size": size_str
+                })
+
+        return datoteke_info
+
+    def _batch_odabir(self, stavke: list[str], naslov: str) -> list[int] | str:
+        """Batch odabir: 1, 1,3,5, 1-5, *, X.
 
         Args:
             stavke: Lista stavki za odabir.
             naslov: Naslov za prikaz.
 
         Returns:
-            Lista indeksa odabranih stavki.
+            Lista indeksa odabranih stavki ili "x" za povratak.
         """
         print(f"{naslov}:")
         print()
@@ -345,9 +516,11 @@ class Menu:
             print(f"  {i}. {stavka}")
         print()
 
-        print("Unesite brojeve (npr. 1,3,5 ili 1-5 ili * za sve):")
-        unos = input("> ").strip()
+        print("Unesite brojeve (npr. 1,3,5 ili 1-5 ili * za sve, ili X za povratak):")
+        unos = input("> ").strip().lower()
 
+        if unos == "x":
+            return "x"
         if unos == "*":
             return list(range(len(stavke)))
 
