@@ -26,7 +26,8 @@ directories:
 # Ref: doc/README_TechDoc.md §15
 # -----------------------------------------------------------------------------
 api:
-  provider: "lm_studio"     # lm_studio | ollama_local | ollama_cloud | openai | gemini | qwen | custom
+  # provider: "lm_studio"     # lm_studio | ollama_local | ollama_cloud | openai | gemini | qwen | custom
+  provider: "lm_studio"
   auto_detect_model: true
   timeout: 120
 

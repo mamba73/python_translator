@@ -186,19 +186,23 @@ class TTSEngine:
             logging.warning(f"Neuspješno pisanje ID3 tagova: {e}")
 
     async def generiraj_audiobook(self, tekst: str, output_dir: Path,
-                                 book_title: str, author: str) -> list[Path]:
+                                  book_title: str, book_config: dict[str, Any] | None = None,
+                                  merge_single: bool = False) -> list[Path]:
         """Orkestracija: segmenti → MP3 → ID3.
 
         Args:
             tekst: Cijeli tekst knjige.
             output_dir: Direktorij za spremanje MP3.
             book_title: Naslov knjige.
-            author: Autor knjige.
+            book_config: Per-book konfiguracija (za author i TTS postavke).
+            merge_single: Ako True, spaja sve segmente u jednu MP3 datoteku.
 
         Returns:
             Lista putanja do generiranih MP3 datoteka.
         """
-        # Podijeli na poglavlja (jednostavna heuristika - po \n\n)
+        author = (book_config or {}).get("author", "Unknown")
+
+        # Podijeli na poglavlja (jednostavna heuristika - po \n\n\n)
         poglavlja_tekst = tekst.split('\n\n\n')
 
         output_dir = self._fm.ensure_dir(output_dir, suffix_if_exists=True)
@@ -228,5 +232,17 @@ class TTSEngine:
 
                 logging.info(f"Generiran MP3: {filename}")
 
+        # Ako je merge_single, spoji sve MP3 u jedan
+        if merge_single and len(sve_mp3_putanje) > 1:
+            merged_path = output_dir / f"{global_counter:03d}_merged.mp3"
+            # Spajanje MP3 datoteka putem ffmpeg-a ili drugog alata
+            logging.info(f"Spajanje {len(sve_mp3_putanje)} MP3 datoteka u jedan.")
+            # TODO: Implementirati spajanje MP3 (npr. pomoću pydub ili ffmpeg)
+            # Za sada vraćamo sve MP3 putanje
+            logging.warning("Merge single nije implementiran — vraćam sve segmente.")
+
         logging.info(f"Ukupno generirano {len(sve_mp3_putanje)} MP3 datoteka.")
         return sve_mp3_putanje
+
+
+

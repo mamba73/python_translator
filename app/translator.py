@@ -127,16 +127,21 @@ class Translator:
 
         return final_tekst, False
 
-    def prevedi_test(self, tekst: str, output_path: str, granularnost: str = "paragraph",
-                     kolicina: int = 1, include_header: bool = True) -> None:
+    def prevedi_test(self, tekst: str, granularnost: str = "paragraph",
+                     kolicina: int = 1, header: bool = True) -> str:
         """Testni prijevod s opcionalnim headerom.
+
+        Vraća prevedeni tekst (s opcionalnim headerom) — pozivatelj
+        sam sprema u željeni direktorij.
 
         Args:
             tekst: Izvorni tekst.
-            output_path: Putanja za spremanje testa.
             granularnost: Granularnost (paragraph/sentence).
             kolicina: Broj segmenata za prevođenje.
-            include_header: Uključi header u output.
+            header: Uključi header u output.
+
+        Returns:
+            Prevedeni tekst (s headerom ako je uključen).
         """
         # Segmentacija
         if granularnost == "paragraph":
@@ -151,18 +156,11 @@ class Translator:
 
         # Spremanje
         output = []
-        if include_header:
+        if header:
             output.append(self._generiraj_test_header(kolicina, granularnost))
 
         output.extend(prevedeni)
-        self._cp.atomic_write(output_path, '\n\n'.join(output))
-
-        # Spremi last_test parametre
-        self._cp.spremi_last_test({
-            "granularity": granularnost,
-            "count": kolicina,
-            "include_header": include_header
-        })
+        return '\n\n'.join(output)
 
     # -----------------------------------------------------------------------
     # API pozivi i provider adaptori
@@ -170,6 +168,7 @@ class Translator:
 
     def _api_call(self, messages: list[dict[str, str]]) -> str:
         """Privatna metoda za API poziv - delegira na odgovarajući adapter."""
+
         adapter = getattr(self, f"_call_{self._provider}", None)
         if adapter is None:
             raise ValueError(f"Nepodržani provider: {self._provider}")

@@ -8,8 +8,11 @@ from __future__ import annotations
 import sys
 import logging
 import os
+import json
+import yaml
 from typing import Any, Callable, Optional
 from pathlib import Path
+from datetime import datetime
 
 # Platform-specific imports
 if sys.platform == "win32":
@@ -34,12 +37,95 @@ from app.tts_engine import TTSEngine
 from app.file_manager import FileManager
 
 
+# ===========================================================================
+# Box-drawing utilities
+# ===========================================================================
+
+def _okvir(sirina: int = 64) -> tuple[str, str, str, str, str, str]:
+    """Vraća znakove za okvir (top, bottom, left, right, top-left, top-right)."""
+    return ("═", "═", "║", "║", "╔", "╗")
+
+
+def nacrtaj_okvir(naslov: str, sirina: int = 64, kontekst: str = "") -> None:
+    """Crta okviran naslov s kontekstualnom putanjom.
+
+    Args:
+        naslov: Naslov sekcije.
+        sirina: Širina okvira u znakovima.
+        kontekst: Putanja konteksta (npr. "GLAVNI IZBORNIK > KONVERZIJA").
+    """
+    print("╔" + "═" * sirina + "╗")
+    # Naslov
+    naslov_str = f"  {naslov}"
+    print("║" + naslov_str.ljust(sirina) + "║")
+    # Kontekst
+    if kontekst:
+        ctx_str = f"  {kontekst}"
+        print("║" + ctx_str.ljust(sirina) + "║")
+    print("╚" + "═" * sirina + "╝")
+
+
+def nacrtaj_okvir_opcije(naslov: str, sirina: int = 52, kontekst: str = "") -> None:
+    """Crta okviran naslov za podizbornike s kontekstualnom putanjom."""
+    print("╔" + "═" * sirina + "╗")
+    naslov_str = f"  {naslov}"
+    print("║" + naslov_str.ljust(sirina) + "║")
+    if kontekst:
+        ctx_str = f"  {kontekst}"
+        print("║" + ctx_str.ljust(sirina) + "║")
+    print("╚" + "═" * sirina + "╝")
+
+
+def prikazi_okvir(stavke: list[str], naslov: str = "", sirina: int = 64,
+                  kontekst: str = "", allow_y: bool = False,
+                  allow_r: bool = False, trenutni: int = 0) -> None:
+    """Crta okviran izbornik s kursorskom navigacijom.
+
+    Args:
+        stavke: Lista opcija za prikaz.
+        naslov: Naslov izbornika.
+        sirina: Širina okvira.
+        kontekst: Putanja konteksta.
+        allow_y: Dozvoli Y kao odgovor.
+        allow_r: Dozvoli R kao odgovor.
+        trenutni: Indeks trenutno označene stavke (0-based).
+    """
+    print("╔" + "═" * sirina + "╗")
+    if naslov:
+        naslov_str = f"  {naslov}"
+        print("║" + naslov_str.ljust(sirina) + "║")
+    if kontekst:
+        ctx_str = f"  {kontekst}"
+        print("║" + ctx_str.ljust(sirina) + "║")
+    print("╠" + "═" * sirina + "╣")
+    for i, stavka in enumerate(stavke, 1):
+        if i - 1 == trenutni:
+            stavka_str = f"  > [{i}] {stavka} <"
+        else:
+            stavka_str = f"  [{i}] {stavka}"
+        print("║" + stavka_str.ljust(sirina) + "║")
+    print("╠" + "═" * sirina + "╣")
+    if allow_y:
+        y_str = "  [Y] — BRZI TEST"
+        print("║" + y_str.ljust(sirina) + "║")
+    if allow_r:
+        r_str = "  [R] — Nastavi od checkpointa"
+        print("║" + r_str.ljust(sirina) + "║")
+    x_str = "  [X] — Izlaz / Povratak"
+    print("║" + x_str.ljust(sirina) + "║")
+    print("╚" + "═" * sirina + "╝")
+
+
+# ===========================================================================
+# CursorMenu — kursorska navigacija
+# ===========================================================================
+
 class CursorMenu:
     """Kursorska navigacija za izbornike."""
 
     @staticmethod
     def odabir_iz_liste(opcije: list[str], naslov: str = "", allow_y: bool = False,
-                        allow_r: bool = False) -> str:
+                        allow_r: bool = False, kontekst: str = "") -> str:
         """Kursorski odabir iz liste (↑↓ + Enter/Space).
 
         Args:
@@ -47,42 +133,31 @@ class CursorMenu:
             naslov: Naslov za prikaz.
             allow_y: Dozvoli Y kao odgovor.
             allow_r: Dozvoli R kao odgovor.
+            kontekst: Putanja konteksta (npr. "GLAVNI IZBORNIK > KONVERZIJA").
 
         Returns:
             Odabir korisnika.
         """
         if sys.platform == "win32" and _MSVCRT_AVAILABLE:
-            return CursorMenu._odabir_windows(opcije, naslov, allow_y, allow_r)
+            return CursorMenu._odabir_windows(opcije, naslov, allow_y, allow_r, kontekst)
         elif _CURSES_AVAILABLE:
-            return CursorMenu._odabir_linux(opcije, naslov, allow_y, allow_r)
+            return CursorMenu._odabir_linux(opcije, naslov, allow_y, allow_r, kontekst)
         else:
             # Fallback na input()
-            return CursorMenu._odabir_fallback(opcije, naslov, allow_y, allow_r)
+            return CursorMenu._odabir_fallback(opcije, naslov, allow_y, allow_r, kontekst)
 
     @staticmethod
-    def _odabir_windows(opcije: list[str], naslov: str, allow_y: bool, allow_r: bool) -> str:
+    def _odabir_windows(opcije: list[str], naslov: str, allow_y: bool, allow_r: bool,
+                        kontekst: str = "") -> str:
         """Windows kursorski odabir koristeći msvcrt."""
+        if not opcije:
+            return "x"
+
         trenutni = 0
 
         while True:
             ocisti_ekran()
-            if naslov:
-                print(naslov)
-                print()
-
-            for i, opc in enumerate(opcije):
-                if i == trenutni:
-                    print(f"> {opc} <")
-                else:
-                    print(f"  {opc}")
-
-            print()
-            if allow_y:
-                print("[Y] - BRZI TEST")
-            if allow_r:
-                print("[R] - Nastavi od checkpointa")
-            print("[X] - Izlaz")
-            print("\nKoristite strelice za navigaciju, Enter za odabir")
+            prikazi_okvir(opcije, naslov, kontekst=kontekst, allow_y=allow_y, allow_r=allow_r, trenutni=trenutni)
 
             # Čekaj tipku
             while True:
@@ -108,8 +183,12 @@ class CursorMenu:
                         return key.decode()
 
     @staticmethod
-    def _odabir_linux(opcije: list[str], naslov: str, allow_y: bool, allow_r: bool) -> str:
+    def _odabir_linux(opcije: list[str], naslov: str, allow_y: bool, allow_r: bool,
+                      kontekst: str = "") -> str:
         """Linux kursorski odabir koristeći curses."""
+        if not opcije:
+            return "x"
+
         def wrapper(stdscr):
             curses.curs_set(0)
             stdscr.keypad(True)
@@ -117,21 +196,30 @@ class CursorMenu:
 
             while True:
                 stdscr.clear()
+                # Crtaj okvir
+                sirina = 64
+                stdscr.addstr("╔" + "═" * sirina + "╗\n")
                 if naslov:
-                    stdscr.addstr(naslov + "\n\n")
+                    naslov_str = f"  {naslov}"
+                    stdscr.addstr("║" + naslov_str.ljust(sirina) + "║\n")
+                if kontekst:
+                    ctx_str = f"  {kontekst}"
+                    stdscr.addstr("║" + ctx_str.ljust(sirina) + "║\n")
+                stdscr.addstr("╠" + "═" * sirina + "╣\n")
 
                 for i, opc in enumerate(opcije):
                     if i == trenutni:
-                        stdscr.addstr(f"> {opc} <\n")
+                        stdscr.addstr(f"║  > [{i + 1}] {opc}" + " " * (sirina - len(f"  > [{i + 1}] {opc}")) + "║\n")
                     else:
-                        stdscr.addstr(f"  {opc}\n")
+                        stdscr.addstr(f"║    [{i + 1}] {opc}" + " " * (sirina - len(f"    [{i + 1}] {opc}")) + "║\n")
 
-                stdscr.addstr("\n")
+                stdscr.addstr("╠" + "═" * sirina + "╣\n")
                 if allow_y:
-                    stdscr.addstr("[Y] - BRZI TEST\n")
+                    stdscr.addstr("║  [Y] — BRZI TEST" + " " * (sirina - 17) + "║\n")
                 if allow_r:
-                    stdscr.addstr("[R] - Nastavi od checkpointa\n")
-                stdscr.addstr("[X] - Izlaz\n")
+                    stdscr.addstr("║  [R] — Nastavi od checkpointa" + " " * (sirina - 31) + "║\n")
+                stdscr.addstr("║  [X] — Izlaz / Povratak" + " " * (sirina - 23) + "║\n")
+                stdscr.addstr("╚" + "═" * sirina + "╝\n")
 
                 stdscr.refresh()
 
@@ -152,21 +240,13 @@ class CursorMenu:
         return curses.wrapper(wrapper)
 
     @staticmethod
-    def _odabir_fallback(opcije: list[str], naslov: str, allow_y: bool, allow_r: bool) -> str:
+    def _odabir_fallback(opcije: list[str], naslov: str, allow_y: bool, allow_r: bool,
+                         kontekst: str = "") -> str:
         """Fallback na input() ako kursorska navigacija nije dostupna."""
-        if naslov:
-            print(naslov)
-            print()
+        if not opcije:
+            return "x"
 
-        for i, opc in enumerate(opcije, 1):
-            print(f"  {i}. {opc}")
-        print()
-
-        if allow_y:
-            print("[Y] - BRZI TEST")
-        if allow_r:
-            print("[R] - Nastavi od checkpointa")
-        print("[X] - Izlaz")
+        prikazi_okvir(opcije, naslov, kontekst=kontekst, allow_y=allow_y, allow_r=allow_r, trenutni=trenutni)
 
         while True:
             odgovor = input("Odabir: ").strip().lower()
@@ -181,6 +261,10 @@ class CursorMenu:
                 if 0 <= idx < len(opcije):
                     return str(idx + 1)
 
+
+# ===========================================================================
+# Menu — CLI sučelje s kursorskom navigacijom
+# ===========================================================================
 
 class Menu:
     """CLI sučelje s kursorskom navigacijom."""
@@ -197,7 +281,7 @@ class Menu:
         # Inicijaliziraj module
         self._fm = FileManager(config)
         self._doc_proc = DocumentProcessor(config)
-        self._text_cleaner = TextCleaner(config, self._fm)
+        self._text_cleaner = TextCleaner(self._fm, config)
         self._translator = Translator(config, checkpoint_manager)
         self._tts_engine = TTSEngine(config, self._fm)
 
@@ -209,7 +293,7 @@ class Menu:
         """Pokreće glavni izbornik."""
         while True:
             odabir = self.show_main()
-            if odabir == "exit" or odabir == "x":
+            if odabir == "exit" or odabir == "x" or odabir == "5":
                 if self._potvrda_izlaza():
                     break
             elif odabir == "test":
@@ -235,45 +319,51 @@ class Menu:
         """
         ocisti_ekran()
 
+        # Header
+        version = self._cfg.get("project", {}).get("version", "0.4.0")
+        nacrtaj_okvir(f"Dynamic Book Translator v{version}", sirina=64,
+                      kontekst="GLAVNI IZBORNIK")
+        print()
+
         # Checkpoint blok
         checkpointi = self._cp.ucitaj_checkpointe()
         if checkpointi:
-            print("=" * 70)
-            print("🔄 AKTIVNI CHECKPOINTOVI:")
+            print("╔" + "═" * 64 + "╗")
+            print("║  🔄 AKTIVNI CHECKPOINTOVI:" + " " * 41 + "║")
             for cp in checkpointi:
                 title = cp.get("book_title", "Nepoznato")
                 progress = f"{cp.get('current_segment', 0)}/{cp.get('total_segments', 0)}"
-                print(f"  • {title} — {progress} segmenata")
-            print("  [R] — Nastavi od zadnje točke")
-            print("=" * 70)
+                line = f"  • {title} — {progress} segmenata"
+                print("║" + line.ljust(64) + "║")
+            print("║  [R] — Nastavi od zadnje točke" + " " * 41 + "║")
+            print("╚" + "═" * 64 + "╝")
             print()
-
-        # Header
-        version = self._cfg.get("project", {}).get("version", "0.4.0")
-        print("=" * 70)
-        print(f"         Dynamic Book Translator v{version}")
-        print("=" * 70)
-        print()
 
         # BRZI TEST linija
         last_test = self._cp.ucitaj_last_test()
         if last_test:
-            print(f"  [Y] — BRZI TEST ({last_test.get('granularnost', 'paragraph')}, "
-                  f"{last_test.get('count', 1)} segmenata)")
+            print("╔" + "═" * 64 + "╗")
+            gran = last_test.get('granularnost', 'paragraph')
+            count = last_test.get('count', 1)
+            hdr = "DA" if last_test.get('header', True) else "NE"
+            y_str = f"  [Y] — BRZI TEST ({gran}, {count} segmenata | Header: {hdr})"
+            print("║" + y_str.ljust(64) + "║")
+            print("╚" + "═" * 64 + "╝")
             print()
 
         # Opcije
         opcije = [
-            "1. Konverzija dokumenata (PDF/DOCX/EPUB/MOBI → TXT)",
-            "2. Čišćenje tehničkog šuma + kreiranje memorije",
-            "3. Prevođenje (TEST / Produkcijski)",
-            "4. TTS sinteza (TXT → MP3)",
-            "X. Izlaz"
+            "Konverzija dokumenata (PDF/DOCX/EPUB/MOBI → TXT)",
+            "Čišćenje tehničkog šuma + kreiranje memorije",
+            "Prevođenje (TEST / Produkcijski)",
+            "TTS sinteza (TXT → MP3)",
+            "Izlaz"
         ]
 
         odabir = CursorMenu.odabir_iz_liste(opcije, "Dynamic Book Translator v0.4.0",
                                             allow_y=last_test is not None,
-                                            allow_r=len(checkpointi) > 0)
+                                            allow_r=len(checkpointi) > 0,
+                                            kontekst="GLAVNI IZBORNIK")
 
         if odabir == "r" and len(checkpointi) > 0:
             # Odabir checkpointa za nastavak
@@ -290,40 +380,48 @@ class Menu:
     def show_phase1(self) -> None:
         """Konverzija dokumenata s batch odabirom."""
         ocisti_ekran()
-        print("=" * 70)
-        print("FAZA 1 — KONVERZIJA DOKUMENATA")
-        print("=" * 70)
+        nacrtaj_okvir("FAZA 1 — KONVERZIJA DOKUMENATA", sirina=64,
+                      kontekst="GLAVNI IZBORNIK > KONVERZIJA")
         print()
 
         input_dir = Path(self._cfg["directories"]["input"])
         if not input_dir.exists():
             print("Direktorij work/input/ ne postoji. Dodajte datoteke za konverziju.")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
             return
 
-        # Pronađi datoteke rekurzivno s metadatima
-        datoteke_info = self._pronadi_datoteke_s_metadatima(input_dir)
+        # Pronađi datoteke rekurzivno s metadatama
+        datoteke_info = self._pronadi_datoteke_s_metadatama(input_dir)
 
         if not datoteke_info:
             print("Nema datoteka u work/input/ (uključujući poddirektorije).")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
             return
 
-        # Prikaz s metadatima
+        # Prikaz s metapodacima
         print(f"Pronađeno: {len(datoteke_info)} datoteka\n")
         for i, info in enumerate(datoteke_info, 1):
             rel_path = info["path"].relative_to(input_dir)
             print(f"  {i}. [{info['type']}] {rel_path} ({info['size']})")
 
         # Batch odabir
-        odabrane = self._batch_odabir([str(info["path"].relative_to(input_dir)) for info in datoteke_info], "Odaberite datoteke za konverziju (ili X za povratak)")
+        odabrane = self._batch_odabir(
+            [str(info["path"].relative_to(input_dir)) for info in datoteke_info],
+            "Odaberite datoteke za konverziju (ili X za povratak)"
+        )
 
         if odabrane == "x":
             return
 
         if not odabrane:
             print("Nije odabrana nijedna datoteka.")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
             return
 
         print(f"\nOdabrano: {len(odabrane)} datoteka")
@@ -331,8 +429,16 @@ class Menu:
 
         # Konvertiraj odabrane datoteke
         for idx in odabrane:
+            if idx < 0 or idx >= len(datoteke_info):
+                print(f"  -> Preskakanje: nevažeći indeks {idx}")
+                continue
             datoteka_info = datoteke_info[idx]
             putanja = datoteka_info["path"]
+
+            # Provjeri postoji li datoteka
+            if not putanja.exists():
+                print(f"  -> Preskakanje: datoteka ne postoji {putanja}")
+                continue
             rel_path = putanja.relative_to(input_dir)
 
             print(f"\nKonverzija: {rel_path}")
@@ -341,13 +447,13 @@ class Menu:
                 # Učitaj tekst iz dokumenta
                 tekst = self._doc_proc.ucitaj_izvorni_tekst(str(putanja))
 
-                # Spremi u output direktorij
-                output_dir = Path(self._cfg["directories"]["output"])
-                output_dir.mkdir(parents=True, exist_ok=True)
+                # Kreiraj per-book direktorij kroz FileManager
+                book_title = putanja.stem
+                book_dir = self._fm.work_output_book_dir(book_title)
 
                 # Kreiraj naziv izlazne datoteke
                 naziv = putanja.stem + ".txt"
-                izlazna_putanja = output_dir / naziv
+                izlazna_putanja = book_dir / naziv
 
                 # Spremi tekst
                 with open(izlazna_putanja, 'w', encoding='utf-8') as f:
@@ -355,11 +461,24 @@ class Menu:
 
                 print(f"  -> Spremljeno: {izlazna_putanja}")
 
+                # Kreiraj per-book config.yaml ako ne postoji
+                config_putanja = book_dir / "config.yaml"
+                if not config_putanja.exists():
+                    from app.config_loader import create_book_config
+                    create_book_config(
+                        book_dir=book_dir,
+                        book_title=book_title,
+                        author="Autor",
+                        original_file=putanja.name,
+                        profile_name="sf_literature"
+                    )
+                    print(f"  -> Config: {config_putanja.name}")
+
             except Exception as e:
                 print(f"  -> Greška: {e}")
 
         print("\nKonverzija završena.")
-        input("Pritisnite Enter za povratak...")
+        ack = self._safe_input("Pritisnite Enter za povratak...")
 
     # -----------------------------------------------------------------------
     # Faza 2 - Čišćenje
@@ -368,15 +487,16 @@ class Menu:
     def show_phase2(self) -> None:
         """Čišćenje tehničkog šuma s batch odabirom."""
         ocisti_ekran()
-        print("=" * 70)
-        print("FAZA 2 — ČIŠĆENJE TEHNIČKOG ŠUMA + KREIRANJE MEMORIJE")
-        print("=" * 70)
+        nacrtaj_okvir("FAZA 2 — ČIŠĆENJE TEHNIČKOG ŠUMA + KREIRANJE MEMORIJE",
+                      sirina=64, kontekst="GLAVNI IZBORNIK > ČIŠĆENJE")
         print()
 
         output_dir = Path(self._cfg["directories"]["output"])
         if not output_dir.exists():
             print("Direktorij work/output/ ne postoji.")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
             return
 
         # Pronađi .txt datoteke ili direktorije knjiga
@@ -384,26 +504,40 @@ class Menu:
         knjige_dir = [d for d in output_dir.iterdir() if d.is_dir()]
 
         if txt_datoteke:
-            # Ako postoje .txt datoteke, prikaži ih
-            print("Pronađene .txt datoteke:")
+            # Ako postoje .txt datoteke u rootu, premjesti ih u per-book direktorije
+            print("Pronađene .txt datoteke u work/output/ (root):")
             for i, txt in enumerate(txt_datoteke, 1):
                 print(f"  {i}. {txt.name}")
 
-            odabrane = self._batch_odabir([t.name for t in txt_datoteke], "Odaberite datoteke za čišćenje (ili X za povratak)")
+            odabrane = self._batch_odabir(
+                [t.name for t in txt_datoteke],
+                "Odaberite datoteke za čišćenje (ili X za povratak)"
+            )
 
             if odabrane == "x":
                 return
 
             if not odabrane:
                 print("Nije odabrana nijedna datoteka.")
-                input("Pritisnite Enter za povratak...")
+                ack = self._safe_input("Pritisnite Enter za povratak...")
+                if ack is None:
+                    return
                 return
 
             print(f"\nOdabrano: {len(odabrane)} datoteka")
             print("Čišćenje u tijeku...")
 
             for idx in odabrane:
+                if idx < 0 or idx >= len(txt_datoteke):
+                    print(f"  -> Preskakanje: nevažeći indeks {idx}")
+                    continue
                 txt_datoteka = txt_datoteke[idx]
+
+                # Provjeri postoji li datoteka
+                if not txt_datoteka.exists():
+                    print(f"  -> Preskakanje: datoteka ne postoji {txt_datoteka.name}")
+                    continue
+
                 print(f"\nČišćenje: {txt_datoteka.name}")
 
                 try:
@@ -411,12 +545,16 @@ class Menu:
                     with open(txt_datoteka, 'r', encoding='utf-8') as f:
                         tekst = f.read()
 
-                    # Očisti dokument
-                    ocisceni_tekst = self._text_cleaner.ocisti_dokument(tekst, txt_datoteka.stem)
+                    # Kreiraj per-book direktorij kroz FileManager
+                    book_title = txt_datoteka.stem
+                    book_dir = self._fm.work_output_book_dir(book_title)
 
-                    # Spremi očišćeni tekst kao novu datoteku s [fixed] sufiksom
-                    naziv = txt_datoteka.stem + "[fixed]" + txt_datoteka.suffix
-                    izlazna_putanja = output_dir / naziv
+                    # Očisti dokument
+                    ocisceni_tekst = self._text_cleaner.ocisti_dokument(tekst, book_title)
+
+                    # Spremi očišćeni tekst kao [fixed] datoteku u per-book direktorij
+                    fixed_naziv = f"{book_title} [fixed].txt"
+                    izlazna_putanja = book_dir / fixed_naziv
                     with open(izlazna_putanja, 'w', encoding='utf-8') as f:
                         f.write(ocisceni_tekst)
 
@@ -424,40 +562,58 @@ class Menu:
 
                     # Kreiraj memoriju
                     memorija = self._text_cleaner.kreiraj_memoriju(ocisceni_tekst)
-                    memorija_putanja = output_dir / f"{txt_datoteka.stem}_memory.json"
-                    import json
+                    memorija_putanja = book_dir / f"{book_title}_memorija.json"
                     with open(memorija_putanja, 'w', encoding='utf-8') as f:
                         json.dump(memorija, f, indent=2, ensure_ascii=False)
                     print(f"  -> Memorija: {memorija_putanja.name}")
 
-                    # Kreiraj book config
-                    book_config = self._text_cleaner.kreiraj_book_config(txt_datoteka.stem, "Autor")
-                    config_putanja = output_dir / f"{txt_datoteka.stem}_config.yaml"
-                    import yaml
-                    with open(config_putanja, 'w', encoding='utf-8') as f:
-                        yaml.dump(book_config, f, default_flow_style=False, allow_unicode=True)
-                    print(f"  -> Config: {config_putanja.name}")
+                    # Kreiraj book config ako ne postoji
+                    config_putanja = book_dir / "config.yaml"
+                    if not config_putanja.exists():
+                        from app.config_loader import create_book_config
+                        create_book_config(
+                            book_dir=book_dir,
+                            book_title=book_title,
+                            author="Autor",
+                            original_file=txt_datoteka.name,
+                            profile_name="sf_literature"
+                        )
+                        print(f"  -> Config: {config_putanja.name}")
 
                 except Exception as e:
                     print(f"  -> Greška: {e}")
 
         elif knjige_dir:
-            # Ako postoje direktoriji, koristi originalnu logiku
-            odabrane = self._batch_odabir([d.name for d in knjige_dir], "Odaberite knjige za čišćenje (ili X za povratak)")
+            # Ako postoje direktoriji knjiga, koristi per-book logiku
+            odabrane = self._batch_odabir(
+                [d.name for d in knjige_dir],
+                "Odaberite knjige za čišćenje (ili X za povratak)"
+            )
 
             if odabrane == "x":
                 return
 
             if not odabrane:
                 print("Nije odabrana nijedna knjiga.")
-                input("Pritisnite Enter za povratak...")
+                ack = self._safe_input("Pritisnite Enter za povratak...")
+                if ack is None:
+                    return
                 return
 
             print(f"\nOdabrano: {len(odabrane)} knjiga")
             print("Čišćenje u tijeku...")
 
             for idx in odabrane:
+                if idx < 0 or idx >= len(knjige_dir):
+                    print(f"  -> Preskakanje: nevažeći indeks {idx}")
+                    continue
                 knjiga_dir = knjige_dir[idx]
+
+                # Provjeri postoji li direktorij
+                if not knjiga_dir.exists() or not knjiga_dir.is_dir():
+                    print(f"  -> Preskatanje: direktorij ne postoji {knjiga_dir.name}")
+                    continue
+
                 txt_datoteke = list(knjiga_dir.glob("*.txt"))
 
                 if not txt_datoteke:
@@ -472,12 +628,10 @@ class Menu:
                         with open(txt_datoteka, 'r', encoding='utf-8') as f:
                             tekst = f.read()
 
-                        # Očisti dokument
+                        # Očisti dokument i spremi kao [fixed] datoteku
                         ocisceni_tekst = self._text_cleaner.ocisti_dokument(tekst, knjiga_dir.name)
-
-                        # Spremi očišćeni tekst kao novu datoteku s [fixed] sufiksom
-                        naziv = txt_datoteka.stem + "[fixed]" + txt_datoteka.suffix
-                        izlazna_putanja = knjiga_dir / naziv
+                        fixed_naziv = f"{txt_datoteka.stem} [fixed].txt"
+                        izlazna_putanja = knjiga_dir / fixed_naziv
                         with open(izlazna_putanja, 'w', encoding='utf-8') as f:
                             f.write(ocisceni_tekst)
 
@@ -485,29 +639,35 @@ class Menu:
 
                         # Kreiraj memoriju
                         memorija = self._text_cleaner.kreiraj_memoriju(ocisceni_tekst)
-                        memorija_putanja = knjiga_dir / "memory.json"
-                        import json
+                        memorija_putanja = knjiga_dir / f"{knjiga_dir.name}_memorija.json"
                         with open(memorija_putanja, 'w', encoding='utf-8') as f:
                             json.dump(memorija, f, indent=2, ensure_ascii=False)
                         print(f"  -> Memorija: {memorija_putanja.name}")
 
-                        # Kreiraj book config
-                        book_config = self._text_cleaner.kreiraj_book_config(knjiga_dir.name, "Autor")
+                        # Kreiraj book config ako ne postoji
                         config_putanja = knjiga_dir / "config.yaml"
-                        import yaml
-                        with open(config_putanja, 'w', encoding='utf-8') as f:
-                            yaml.dump(book_config, f, default_flow_style=False, allow_unicode=True)
-                        print(f"  -> Config: {config_putanja.name}")
+                        if not config_putanja.exists():
+                            from app.config_loader import create_book_config
+                            create_book_config(
+                                book_dir=knjiga_dir,
+                                book_title=knjiga_dir.name,
+                                author="Autor",
+                                original_file=txt_datoteka.name,
+                                profile_name="sf_literature"
+                            )
+                            print(f"  -> Config: {config_putanja.name}")
 
                     except Exception as e:
                         print(f"  -> Greška: {e}")
         else:
             print("Nema .txt datoteka ili knjiga u work/output/")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
             return
 
         print("\nČišćenje završeno.")
-        input("Pritisnite Enter za povratak...")
+        ack = self._safe_input("Pritisnite Enter za povratak...")
 
     # -----------------------------------------------------------------------
     # Faza 3 - Prevođenje
@@ -517,9 +677,8 @@ class Menu:
         """Prevođenje: TEST / Produkcijski / Opcije."""
         while True:
             ocisti_ekran()
-            print("=" * 70)
-            print("FAZA 3 — PREVOĐENJE")
-            print("=" * 70)
+            nacrtaj_okvir("FAZA 3 — PREVOĐENJE", sirina=64,
+                          kontekst="GLAVNI IZBORNIK > PREVOĐENJE")
             print()
 
             # Notifikacijska linija
@@ -530,17 +689,18 @@ class Menu:
             print()
 
             opcije = [
-                "1. TEST prijevod",
-                "2. Produkcijski prijevod",
-                "0. Opcije",
-                "X. Povratak"
+                "TEST prijevod",
+                "Produkcijski prijevod",
+                "Opcije",
+                "Povratak"
             ]
 
-            odabir = CursorMenu.odabir_iz_liste(opcije, "FAZA 3 — PREVOĐENJE")
+            odabir = CursorMenu.odabir_iz_liste(opcije, "FAZA 3 — PREVOĐENJE",
+                                                kontekst="GLAVNI IZBORNIK > PREVOĐENJE")
 
-            if odabir == "x":
+            if odabir == "x" or odabir == "4":
                 break
-            elif odabir == "0":
+            elif odabir == "3":
                 self.show_opcije()
             elif odabir == "1":
                 self._test_prijevod()
@@ -551,9 +711,33 @@ class Menu:
         """Opcije: Header, Granularnost, Količina."""
         while True:
             ocisti_ekran()
-            print("=" * 70)
-            print("OPCIJE PREVOĐENJA")
-            print("=" * 70)
+            nacrtaj_okvir("OPCIJE PREVOĐENJA", sirina=52,
+                          kontekst="GLAVNI IZBORNIK > PREVOĐENJE > OPCIJE")
+            print()
+
+            # Dropdown prikaz
+            print("╔" + "═" * 52 + "╗")
+            print("║  [1] Header u testnoj datoteci:" + " " * 23 + "║")
+            if self._opcije["header"]:
+                print("║      ● DA" + " " * 43 + "║")
+                print("║      ○ NE" + " " * 43 + "║")
+            else:
+                print("║      ○ DA" + " " * 43 + "║")
+                print("║      ● NE" + " " * 43 + "║")
+            print("║" + " " * 52 + "║")
+            print("║  [2] Granularnost segmenata:" + " " * 25 + "║")
+            granularnosti = ["odlomak", "paragraf", "rečenica"]
+            trenutni_g = self._opcije["granularnost"]
+            for g in granularnosti:
+                if g == trenutni_g:
+                    print(f"║      ● {g.capitalize()}" + " " * (52 - 8 - len(g.capitalize())) + "║")
+                else:
+                    print(f"║      ○ {g.capitalize()}" + " " * (52 - 8 - len(g.capitalize())) + "║")
+            print("║" + " " * 52 + "║")
+            print(f"║  [3] Količina (default): {self._opcije['kolicina']}" + " " * (52 - 30 - len(str(self._opcije['kolicina']))) + "║")
+            print("║" + " " * 52 + "║")
+            print("║  [X] Povratak" + " " * 40 + "║")
+            print("╚" + "═" * 52 + "╝")
             print()
 
             opcije = [
@@ -563,9 +747,10 @@ class Menu:
                 "X. Povratak"
             ]
 
-            odabir = CursorMenu.odabir_iz_liste(opcije, "OPCIJE PREVOĐENJA")
+            odabir = CursorMenu.odabir_iz_liste(opcije, "OPCIJE PREVOĐENJA",
+                                                kontekst="GLAVNI IZBORNIK > PREVOĐENJE > OPCIJE")
 
-            if odabir == "x":
+            if odabir == "x" or odabir == "4":
                 break
             elif odabir == "1":
                 self._opcije["header"] = not self._opcije["header"]
@@ -587,52 +772,83 @@ class Menu:
     def show_phase4(self) -> None:
         """TTS sinteza: zasebni segmenti / jedna datoteka."""
         ocisti_ekran()
-        print("=" * 70)
-        print("FAZA 4 — TTS SINTEZA")
-        print("=" * 70)
+        nacrtaj_okvir("FAZA 4 — TTS SINTEZA", sirina=64,
+                      kontekst="GLAVNI IZBORNIK > TTS")
         print()
 
         opcije = [
-            "1. Zasebne MP3 datoteke po segmentima",
-            "2. Jedna MP3 datoteka (cijela knjiga)",
-            "X. Povratak"
+            "Zasebne MP3 datoteke po segmentima",
+            "Jedna MP3 datoteka (cijela knjiga)",
+            "Povratak"
         ]
 
-        odabir = CursorMenu.odabir_iz_liste(opcije, "FAZA 4 — TTS SINTEZA")
+        odabir = CursorMenu.odabir_iz_liste(opcije, "FAZA 4 — TTS SINTEZA",
+                                            kontekst="GLAVNI IZBORNIK > TTS")
 
-        if odabir == "x":
+        if odabir == "x" or odabir == "3":
             return
 
         # Odabir knjige za TTS
         translated_dir = Path(self._cfg["directories"]["translated"])
         if not translated_dir.exists():
             print("Direktorij work/translated/ ne postoji.")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
             return
 
-        knjige = [d for d in translated_dir.iterdir() if d.is_dir()]
+        try:
+            knjige = [d for d in translated_dir.iterdir() if d.is_dir()]
+        except PermissionError as e:
+            print(f"Greška: Nedozvoljen pristup direktoriju work/translated/: {e}")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
+            return
+        except OSError as e:
+            print(f"Greška pri čitanju direktorija work/translated/: {e}")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
+            return
 
         if not knjige:
             print("Nema knjiga u work/translated/")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
             return
 
-        odabrane = self._batch_odabir([d.name for d in knjige], "Odaberite knjigu za TTS sintezu (ili X za povratak)")
+        odabrane = self._batch_odabir(
+            [d.name for d in knjige],
+            "Odaberite knjigu za TTS sintezu (ili X za povratak)"
+        )
 
         if odabrane == "x":
             return
 
         if not odabrane or len(odabrane) != 1:
             print("Odaberite točno jednu knjigu za TTS sintezu.")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
             return
 
-        knjiga_dir = knjige[odabrane[0]]
+        idx = odabrane[0]
+        if idx < 0 or idx >= len(knjige):
+            print("Greška: nevažeći odabir knjige.")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
+        knjiga_dir = knjige[idx]
+
+        # Provjeri postoji li direktorij
+        if not knjiga_dir.exists() or not knjiga_dir.is_dir():
+            print(f"Direktorij {knjiga_dir.name} ne postoji.")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
         txt_datoteke = list(knjiga_dir.glob("*.txt"))
 
         if not txt_datoteke:
             print(f"Nema .txt datoteka u {knjiga_dir.name}")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
             return
 
         txt_datoteka = txt_datoteke[0]
@@ -646,16 +862,18 @@ class Menu:
                 tekst = f.read()
 
             # Učitaj book config ako postoji
-            import yaml
             config_putanja = knjiga_dir / "config.yaml"
             book_config = None
             if config_putanja.exists():
                 with open(config_putanja, 'r', encoding='utf-8') as f:
                     book_config = yaml.safe_load(f)
 
-            # Kreiraj audiobook direktorij
-            audiobook_dir = self._fm.audiobook_dir(knjiga_dir.name, book_config.get("author", "Unknown") if book_config else "Unknown")
-            audiobook_dir.mkdir(parents=True, exist_ok=True)
+            # Kreiraj audiobook direktorij kroz FileManager
+            audiobook_dir = self._fm.audiobook_dir(
+                knjiga_dir.name,
+                book_config.get("author", "Unknown") if book_config else "Unknown"
+            )
+            audiobook_dir = self._fm.ensure_dir(audiobook_dir, suffix_if_exists=True)
 
             # Pozovi TTSEngine
             self._tts_engine.generiraj_audiobook(
@@ -671,14 +889,14 @@ class Menu:
         except Exception as e:
             print(f"Greška pri TTS sintezi: {e}")
 
-        input("\nPritisnite Enter za povratak...")
+        ack = self._safe_input("\nPritisnite Enter za povratak...")
 
     # -----------------------------------------------------------------------
     # Pomoćne metode
     # -----------------------------------------------------------------------
 
-    def _pronadi_datoteke_s_metadatima(self, dir_path: Path) -> list[dict[str, Any]]:
-        """Pronalazi datoteke rekurzivno s metadatima o tipu.
+    def _pronadi_datoteke_s_metadatama(self, dir_path: Path) -> list[dict[str, Any]]:
+        """Pronalazi datoteke rekurzivno s metadatama o tipu.
 
         Args:
             dir_path: Početni direktorij za pretragu.
@@ -718,6 +936,21 @@ class Menu:
 
         return datoteke_info
 
+    def _safe_input(self, prompt: str = "") -> Optional[str]:
+        """Sigurno čitanje unosa s rukovanjem EOF/KeyboardInterrupt.
+
+        Args:
+            prompt: Poruka za prikaz prije unosa.
+
+        Returns:
+            Unos korisnika ili None kod EOF/KeyboardInterrupt.
+        """
+        try:
+            return input(prompt)
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+
     def _batch_odabir(self, stavke: list[str], naslov: str) -> list[int] | str:
         """Batch odabir: 1, 1,3,5, 1-5, *, X.
 
@@ -728,6 +961,10 @@ class Menu:
         Returns:
             Lista indeksa odabranih stavki ili "x" za povratak.
         """
+        if not stavke:
+            print("Nema dostupnih stavki za odabir.")
+            return []
+
         print(f"{naslov}:")
         print()
 
@@ -736,7 +973,11 @@ class Menu:
         print()
 
         print("Unesite brojeve (npr. 1,3,5 ili 1-5 ili * za sve, ili X za povratak):")
-        unos = input("> ").strip().lower()
+        unos = self._safe_input("> ")
+        if unos is None:
+            return "x"  # EOF/KeyboardInterrupt -> povratak
+
+        unos = unos.strip().lower()
 
         if unos == "x":
             return "x"
@@ -746,15 +987,31 @@ class Menu:
         odabrani = set()
         for dio in unos.split(","):
             dio = dio.strip()
+            if not dio:
+                continue
             if "-" in dio:
-                start, end = map(int, dio.split("-"))
-                for i in range(start - 1, end):
-                    if 0 <= i < len(stavke):
-                        odabrani.add(i)
+                try:
+                    parts = dio.split("-")
+                    if len(parts) != 2:
+                        print(f"  -> Nevažeći raspon: {dio}")
+                        continue
+                    start, end = map(int, parts)
+                    # Ispravljanje: range(start-1, end+1) za ispravan raspon (inclusive end)
+                    if start > end:
+                        print(f"  -> Nevažeći raspon: {dio} (start > end)")
+                        continue
+                    for i in range(start - 1, end):
+                        if 0 <= i < len(stavke):
+                            odabrani.add(i)
+                except ValueError:
+                    print(f"  -> Nevažeći raspon: {dio}")
+                    continue
             elif dio.isdigit():
                 idx = int(dio) - 1
                 if 0 <= idx < len(stavke):
                     odabrani.add(idx)
+            else:
+                print(f"  -> Nevažeći unos: {dio}")
 
         return sorted(odabrani)
 
@@ -765,18 +1022,103 @@ class Menu:
             True ako korisnik potvrđuje izlaz.
         """
         print()
-        odgovor = input("Sigurno želite izaći? (Y/N): ").strip().upper()
-        return odgovor == "Y"
+        try:
+            odgovor = input("Sigurno želite izaći? (Y/N): ").strip().upper()
+            return odgovor == "Y"
+        except (EOFError, KeyboardInterrupt):
+            print("\nIzlaz zbog prekida.")
+            return True
 
     def _brzi_test(self) -> None:
         """Pokreće BRZI TEST iz last_test.json."""
-        print("\nPokretanje BRZOG TESTA...")
+        ocisti_ekran()
+        nacrtaj_okvir("BRZI TEST", sirina=64,
+                      kontekst="GLAVNI IZBORNIK > BRZI TEST")
+        print()
+
         last_test = self._cp.ucitaj_last_test()
-        if last_test:
-            print(f"Granularnost: {last_test.get('granularnost')}")
-            print(f"Količina: {last_test.get('count')}")
-            print("TEST prijevod još nije implementiran u ovoj fazi refactoringa.")
-        input("Pritisnite Enter za povratak...")
+        if not last_test:
+            print("Nema podataka za BRZI TEST (pokrenite prvo TEST prijevod).")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
+        print(f"Granularnost: {last_test.get('granularnost', 'paragraph')}")
+        print(f"Količina: {last_test.get('count', 1)}")
+        print(f"Header: {last_test.get('header', True)}")
+        print()
+        print("BRZI TEST ponavlja zadnji TEST prijevod s istim postavkama.")
+        print()
+
+        book_title = last_test.get("book_title")
+        if not book_title:
+            print("Greška: nema naslova knjige u last_test.json.")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
+        output_dir = Path(self._cfg["directories"]["output"])
+        knjiga_dir = output_dir / book_title
+
+        if not knjiga_dir.exists() or not knjiga_dir.is_dir():
+            print(f"Direktorij {knjiga_dir} ne postoji.")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
+        txt_datoteke = list(knjiga_dir.glob("*.txt"))
+        if not txt_datoteke:
+            print(f"Nema .txt datoteka u {knjiga_dir.name}")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
+        # Filtriraj test datoteke da uzme originalnu
+        original_txt = [t for t in txt_datoteke if "_test_" not in t.name and "[fixed]" not in t.stem]
+        if not original_txt:
+            original_txt = txt_datoteke
+
+        txt_datoteka = original_txt[0]
+        print(f"BRZI TEST: {knjiga_dir.name}/{txt_datoteka.name}")
+        print()
+
+        try:
+            with open(txt_datoteka, 'r', encoding='utf-8') as f:
+                tekst = f.read()
+
+            # Učitaj book config ako postoji
+            config_putanja = knjiga_dir / "config.yaml"
+            book_config = None
+            if config_putanja.exists():
+                with open(config_putanja, 'r', encoding='utf-8') as f:
+                    book_config = yaml.safe_load(f)
+
+            prijevod = self._translator.prevedi_test(
+                tekst,
+                granularnost=last_test.get("granularnost", "paragraph"),
+                kolicina=last_test.get("count", 1),
+                header=last_test.get("header", True)
+            )
+
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            naziv = f"{txt_datoteka.stem}_test_{timestamp}.txt"
+
+            # Spremi u work/translated/<Knjiga>/
+            translated_dir = Path(self._cfg["directories"]["translated"])
+            translated_book_dir = self._fm.book_output_dir(
+                knjiga_dir.name,
+                book_config.get("author", "Unknown") if book_config else "Unknown"
+            )
+            translated_book_dir = self._fm.ensure_dir(translated_book_dir, suffix_if_exists=True)
+
+            izlazna_putanja = translated_book_dir / naziv
+
+            with open(izlazna_putanja, 'w', encoding='utf-8') as f:
+                f.write(prijevod)
+
+            print(f"BRZI TEST prijevod spremljen: {izlazna_putanja.name}")
+
+        except Exception as e:
+            print(f"Greška pri BRZOM TESTU: {e}")
+
+        ack = self._safe_input("\nPritisnite Enter za povratak...")
 
     def _odabir_checkpointa(self, checkpointi: list[dict]) -> str:
         """Odabir checkpointa za nastavak.
@@ -785,63 +1127,100 @@ class Menu:
             checkpointi: Lista checkpointova.
 
         Returns:
-            "resume" ili odgovor za nastavak.
+            "resume:<index>" s indeksom odabranog checkpointa, ili "x" za povratak.
         """
+        if not checkpointi:
+            print("Nema dostupnih checkpointova.")
+            return "x"
+
         print("\nOdaberite checkpoint za nastavak:")
         for i, cp in enumerate(checkpointi, 1):
             title = cp.get("book_title", "Nepoznato")
             progress = f"{cp.get('current_segment', 0)}/{cp.get('total_segments', 0)}"
             print(f"  {i}. {title} — {progress}")
 
-        odgovor = input("\nOdabir (ili X za povratak): ").strip().lower()
+        odgovor_raw = self._safe_input("\nOdabir (ili X za povratak): ")
+        if odgovor_raw is None:
+            return "x"
+        odgovor = odgovor_raw.strip().lower()
         if odgovor == "x":
             return "x"
-
-        # Vrati "resume" - konkretna logika nastavka će se implementirati kasnije
-        return "resume"
+        if odgovor.isdigit():
+            idx = int(odgovor) - 1
+            if 0 <= idx < len(checkpointi):
+                return f"resume:{idx}"
+        print("Nevažeći odabir.")
+        return "x"
 
     def _test_prijevod(self) -> None:
         """TEST prijevod."""
         ocisti_ekran()
-        print("=" * 70)
-        print("TEST PRIJEVOD")
-        print("=" * 70)
+        nacrtaj_okvir("TEST PRIJEVOD", sirina=64,
+                      kontekst="GLAVNI IZBORNIK > PREVOĐENJE > TEST")
         print()
 
         output_dir = Path(self._cfg["directories"]["output"])
         if not output_dir.exists():
             print("Direktorij work/output/ ne postoji.")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
             return
 
-        # Pronađi direktorije knjiga
-        knjige = [d for d in output_dir.iterdir() if d.is_dir()]
+        try:
+            knjige = [d for d in output_dir.iterdir() if d.is_dir()]
+        except OSError as e:
+            print(f"Greška pri čitanju direktorija work/output/: {e}")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
+            return
 
         if not knjige:
             print("Nema knjiga u work/output/")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
             return
 
         # Odabir knjige
-        odabrane = self._batch_odabir([d.name for d in knjige], "Odaberite knjigu za TEST prijevod (ili X za povratak)")
+        odabrane = self._batch_odabir(
+            [d.name for d in knjige],
+            "Odaberite knjigu za TEST prijevod (ili X za povratak)"
+        )
 
         if odabrane == "x":
             return
 
         if not odabrane or len(odabrane) != 1:
             print("Odaberite točno jednu knjigu za TEST prijevod.")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
             return
 
-        knjiga_dir = knjige[odabrane[0]]
-        txt_datoteke = list(knjiga_dir.glob("*.txt"))
-
-        if not txt_datoteke:
-            print(f"Nema .txt datoteka u {knjiga_dir.name}")
-            input("Pritisnite Enter za povratak...")
+        idx = odabrane[0]
+        if idx < 0 or idx >= len(knjige):
+            print(f"Greška: nevažeći indeks {idx}.")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
             return
 
-        txt_datoteka = txt_datoteke[0]
+        knjiga_dir = knjige[idx]
+
+        # Provjeri postoji li direktorij
+        if not knjiga_dir.exists() or not knjiga_dir.is_dir():
+            print(f"Direktorij {knjiga_dir.name} ne postoji.")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
+        # Traži [fixed] datoteku
+        fixed_datoteke = list(knjiga_dir.glob("*[fixed]*.txt"))
+        if not fixed_datoteke:
+            txt_datoteke = list(knjiga_dir.glob("*.txt"))
+            if not txt_datoteke:
+                print(f"Nema .txt datoteka u {knjiga_dir.name}")
+                ack = self._safe_input("Pritisnite Enter za povratak...")
+                return
+            txt_datoteka = txt_datoteke[0]
+        else:
+            txt_datoteka = fixed_datoteke[0]
+
         print(f"\nTEST prijevod: {knjiga_dir.name}/{txt_datoteka.name}")
         print(f"Granularnost: {self._opcije['granularnost']}, Količina: {self._opcije['kolicina']}, Header: {self._opcije['header']}")
         print()
@@ -851,6 +1230,13 @@ class Menu:
             with open(txt_datoteka, 'r', encoding='utf-8') as f:
                 tekst = f.read()
 
+            # Učitaj book config ako postoji
+            config_putanja = knjiga_dir / "config.yaml"
+            book_config = None
+            if config_putanja.exists():
+                with open(config_putanja, 'r', encoding='utf-8') as f:
+                    book_config = yaml.safe_load(f)
+
             # Pozovi translator za TEST prijevod
             prijevod = self._translator.prevedi_test(
                 tekst,
@@ -859,11 +1245,19 @@ class Menu:
                 header=self._opcije["header"]
             )
 
-            # Spremi TEST prijevod
+            # Spremi TEST prijevod u work/translated/<Knjiga>/
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             naziv = f"{txt_datoteka.stem}_test_{timestamp}.txt"
-            izlazna_putanja = knjiga_dir / naziv
+
+            translated_dir = Path(self._cfg["directories"]["translated"])
+            translated_book_dir = self._fm.book_output_dir(
+                knjiga_dir.name,
+                book_config.get("author", "Unknown") if book_config else "Unknown"
+            )
+            translated_book_dir = self._fm.ensure_dir(translated_book_dir, suffix_if_exists=True)
+
+            izlazna_putanja = translated_book_dir / naziv
 
             with open(izlazna_putanja, 'w', encoding='utf-8') as f:
                 f.write(prijevod)
@@ -882,50 +1276,77 @@ class Menu:
         except Exception as e:
             print(f"Greška pri TEST prijevodu: {e}")
 
-        input("\nPritisnite Enter za povratak...")
+        ack = self._safe_input("\nPritisnite Enter za povratak...")
 
     def _produkcijski_prijevod(self) -> None:
         """Produkcijski prijevod."""
         ocisti_ekran()
-        print("=" * 70)
-        print("PRODUKCIJSKI PRIJEVOD")
-        print("=" * 70)
+        nacrtaj_okvir("PRODUKCIJSKI PRIJEVOD", sirina=64,
+                      kontekst="GLAVNI IZBORNIK > PREVOĐENJE > PRODUKCIJA")
         print()
 
         output_dir = Path(self._cfg["directories"]["output"])
         if not output_dir.exists():
             print("Direktorij work/output/ ne postoji.")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
             return
 
-        # Pronađi direktorije knjiga
-        knjige = [d for d in output_dir.iterdir() if d.is_dir()]
+        try:
+            knjige = [d for d in output_dir.iterdir() if d.is_dir()]
+        except OSError as e:
+            print(f"Greška pri čitanju direktorija work/output/: {e}")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            if ack is None:
+                return
+            return
 
         if not knjige:
             print("Nema knjiga u work/output/")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
             return
 
         # Odabir knjige
-        odabrane = self._batch_odabir([d.name for d in knjige], "Odaberite knjigu za produkcijski prijevod (ili X za povratak)")
+        odabrane = self._batch_odabir(
+            [d.name for d in knjige],
+            "Odaberite knjigu za produkcijski prijevod (ili X za povratak)"
+        )
 
         if odabrane == "x":
             return
 
         if not odabrane or len(odabrane) != 1:
             print("Odaberite točno jednu knjigu za produkcijski prijevod.")
-            input("Pritisnite Enter za povratak...")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
             return
 
-        knjiga_dir = knjige[odabrane[0]]
-        txt_datoteke = list(knjiga_dir.glob("*.txt"))
-
-        if not txt_datoteke:
-            print(f"Nema .txt datoteka u {knjiga_dir.name}")
-            input("Pritisnite Enter za povratak...")
+        idx = odabrane[0]
+        if idx < 0 or idx >= len(knjige):
+            print(f"Greška: nevažeći indeks {idx}.")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
             return
 
-        txt_datoteka = txt_datoteke[0]
+        knjiga_dir = knjige[idx]
+
+        # Provjeri postoji li direktorij
+        if not knjiga_dir.exists() or not knjiga_dir.is_dir():
+            print(f"Direktorij {knjiga_dir.name} ne postoji.")
+            ack = self._safe_input("Pritisnite Enter za povratak...")
+            return
+
+        # Traži [fixed] datoteku
+        fixed_datoteke = list(knjiga_dir.glob("*[fixed]*.txt"))
+        if not fixed_datoteke:
+            txt_datoteke = list(knjiga_dir.glob("*.txt"))
+            if not txt_datoteke:
+                print(f"Nema .txt datoteka u {knjiga_dir.name}")
+                ack = self._safe_input("Pritisnite Enter za povratak...")
+                return
+            txt_datoteka = txt_datoteke[0]
+        else:
+            txt_datoteka = fixed_datoteke[0]
+
         print(f"\nProdukcijski prijevod: {knjiga_dir.name}/{txt_datoteka.name}")
         print(f"Granularnost: {self._opcije['granularnost']}")
         print()
@@ -936,31 +1357,31 @@ class Menu:
                 tekst = f.read()
 
             # Učitaj book config ako postoji
-            import yaml
             config_putanja = knjiga_dir / "config.yaml"
             book_config = None
             if config_putanja.exists():
                 with open(config_putanja, 'r', encoding='utf-8') as f:
                     book_config = yaml.safe_load(f)
 
+            # Spremi produkcijski prijevod u work/translated/<Knjiga>/
+            translated_dir = Path(self._cfg["directories"]["translated"])
+            translated_book_dir = self._fm.book_output_dir(
+                knjiga_dir.name,
+                book_config.get("author", "Unknown") if book_config else "Unknown"
+            )
+            translated_book_dir = self._fm.ensure_dir(translated_book_dir, suffix_if_exists=True)
+
             # Pozovi translator za produkcijski prijevod
             prijevod = self._translator.prevedi_knjigu(
                 tekst,
-                book_title=knjiga_dir.name,
-                book_config=book_config,
+                output_path=str(translated_book_dir / f"{knjiga_dir.name}.txt"),
+                book_id=f"{knjiga_dir.name}_fixed",
                 granularnost=self._opcije["granularnost"]
             )
 
-            # Spremi produkcijski prijevod
-            naziv = f"{txt_datoteka.stem}.txt"
-            izlazna_putanja = knjiga_dir / naziv
-
-            with open(izlazna_putanja, 'w', encoding='utf-8') as f:
-                f.write(prijevod)
-
-            print(f"Produkcijski prijevod spremljen: {izlazna_putanja.name}")
+            print(f"Produkcijski prijevod spremljen: {translated_book_dir / f'{knjiga_dir.name}.txt'}")
 
         except Exception as e:
             print(f"Greška pri produkcijskom prijevodu: {e}")
 
-        input("\nPritisnite Enter za povratak...")
+        ack = self._safe_input("\nPritisnite Enter za povratak...")

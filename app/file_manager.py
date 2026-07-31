@@ -108,7 +108,7 @@ class FileManager:
         Ne dodaje suffix — direktorij se kreira samo jednom.
         """
         base = Path(self._dirs["output"])
-        name = self.sanitize_name(book_title)
+        name = self.sanitize_name(book_title, lowercase=False)
         path = base / name
         path.mkdir(parents=True, exist_ok=True)
         return path
@@ -118,20 +118,26 @@ class FileManager:
     # -----------------------------------------------------------------------
 
     @staticmethod
-    def sanitize_name(name: str, separator: str = "-") -> str:
-        """Uklanja dijakritike, pretvara razmake u separator, lowercase.
+    def sanitize_name(name: str, separator: str = "-", lowercase: bool = True) -> str:
+        """Uklanja dijakritike, pretvara razmake u separator.
 
         Args:
-            name:      Originalni naziv.
-            separator: Zamjena za razmake (default: '-').
+            name:       Originalni naziv.
+            separator:  Zamjena za razmake (default: '-').
+            lowercase:  Ako True, pretvara u mala slova (default: True).
+                        Postavi na False za work/output/ direktorije gdje se
+                        čuva originalni case (npr. "Dune" ne "dune").
 
         Returns:
             Sanitizirani naziv spreman za datotečni sustav.
         """
         name = name.translate(_CHAR_MAP)
-        name = re.sub(r'[^\w\s-]', '', name).strip().lower()
+        name = re.sub(r'[^\w\s-]', '', name).strip()
+        if lowercase:
+            name = name.lower()
         name = re.sub(r'\s+', separator, name)
         return name
+
 
     # -----------------------------------------------------------------------
     # Atomski zapis
