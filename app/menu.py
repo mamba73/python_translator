@@ -82,27 +82,30 @@ class CursorMenu:
             if allow_r:
                 print("[R] - Nastavi od checkpointa")
             print("[X] - Izlaz")
+            print("\nKoristite strelice za navigaciju, Enter za odabir")
 
             # Čekaj tipku
             while True:
                 if msvcrt.kbhit():
                     key = msvcrt.getch()
-                    if key == b'\xe0':  # Extended key (arrows)
+                    if key == b'\xe0' or key == b'\x00':  # Extended key prefix
                         key = msvcrt.getch()
-                        if key == b'H':  # Up
+                        if key == b'H' or key == b'\x48':  # Up
                             trenutni = (trenutni - 1) % len(opcije)
                             break
-                        elif key == b'P':  # Down
+                        elif key == b'P' or key == b'\x50':  # Down
                             trenutni = (trenutni + 1) % len(opcije)
                             break
-                    elif key in (b'\r', b' '):  # Enter or Space
+                    elif key in (b'\r', b' ', b'\n'):  # Enter or Space
                         return str(trenutni + 1)
-                    elif key == b'x':
+                    elif key == b'x' or key == b'X':
                         return "x"
-                    elif key == b'y' and allow_y:
+                    elif (key == b'y' or key == b'Y') and allow_y:
                         return "y"
-                    elif key == b'r' and allow_r:
+                    elif (key == b'r' or key == b'R') and allow_r:
                         return "r"
+                    elif key.isdigit() and 1 <= int(key) <= len(opcije):
+                        return key.decode()
 
     @staticmethod
     def _odabir_linux(opcije: list[str], naslov: str, allow_y: bool, allow_r: bool) -> str:
@@ -376,39 +379,32 @@ class Menu:
             input("Pritisnite Enter za povratak...")
             return
 
-        # Pronađi direktorije knjiga
-        knjige = [d for d in output_dir.iterdir() if d.is_dir()]
+        # Pronađi .txt datoteke ili direktorije knjiga
+        txt_datoteke = list(output_dir.glob("*.txt"))
+        knjige_dir = [d for d in output_dir.iterdir() if d.is_dir()]
 
-        if not knjige:
-            print("Nema knjiga u work/output/")
-            input("Pritisnite Enter za povratak...")
-            return
+        if txt_datoteke:
+            # Ako postoje .txt datoteke, prikaži ih
+            print("Pronađene .txt datoteke:")
+            for i, txt in enumerate(txt_datoteke, 1):
+                print(f"  {i}. {txt.name}")
 
-        # Batch odabir
-        odabrane = self._batch_odabir([d.name for d in knjige], "Odaberite knjige za čišćenje (ili X za povratak)")
+            odabrane = self._batch_odabir([t.name for t in txt_datoteke], "Odaberite datoteke za čišćenje (ili X za povratak)")
 
-        if odabrane == "x":
-            return
+            if odabrane == "x":
+                return
 
-        if not odabrane:
-            print("Nije odabrana nijedna knjiga.")
-            input("Pritisnite Enter za povratak...")
-            return
+            if not odabrane:
+                print("Nije odabrana nijedna datoteka.")
+                input("Pritisnite Enter za povratak...")
+                return
 
-        print(f"\nOdabrano: {len(odabrane)} knjiga")
-        print("Čišćenje u tijeku...")
+            print(f"\nOdabrano: {len(odabrane)} datoteka")
+            print("Čišćenje u tijeku...")
 
-        # Čisti odabrane knjige
-        for idx in odabrane:
-            knjiga_dir = knjige[idx]
-            txt_datoteke = list(knjiga_dir.glob("*.txt"))
-
-            if not txt_datoteke:
-                print(f"\n{knjiga_dir.name}: Nema .txt datoteka za čišćenje.")
-                continue
-
-            for txt_datoteka in txt_datoteke:
-                print(f"\nČišćenje: {knjiga_dir.name}/{txt_datoteka.name}")
+            for idx in odabrane:
+                txt_datoteka = txt_datoteke[idx]
+                print(f"\nČišćenje: {txt_datoteka.name}")
 
                 try:
                     # Učitaj tekst
@@ -416,7 +412,7 @@ class Menu:
                         tekst = f.read()
 
                     # Očisti dokument
-                    ocisceni_tekst = self._text_cleaner.ocisti_dokument(tekst)
+                    ocisceni_tekst = self._text_cleaner.ocisti_dokument(tekst, txt_datoteka.stem)
 
                     # Spremi očišćeni tekst
                     with open(txt_datoteka, 'w', encoding='utf-8') as f:
@@ -426,15 +422,15 @@ class Menu:
 
                     # Kreiraj memoriju
                     memorija = self._text_cleaner.kreiraj_memoriju(ocisceni_tekst)
-                    memorija_putanja = knjiga_dir / "memory.json"
+                    memorija_putanja = output_dir / f"{txt_datoteka.stem}_memory.json"
                     import json
                     with open(memorija_putanja, 'w', encoding='utf-8') as f:
                         json.dump(memorija, f, indent=2, ensure_ascii=False)
                     print(f"  -> Memorija: {memorija_putanja.name}")
 
                     # Kreiraj book config
-                    book_config = self._text_cleaner.kreiraj_book_config(knjiga_dir.name, "Autor")
-                    config_putanja = knjiga_dir / "config.yaml"
+                    book_config = self._text_cleaner.kreiraj_book_config(txt_datoteka.stem, "Autor")
+                    config_putanja = output_dir / f"{txt_datoteka.stem}_config.yaml"
                     import yaml
                     with open(config_putanja, 'w', encoding='utf-8') as f:
                         yaml.dump(book_config, f, default_flow_style=False, allow_unicode=True)
@@ -442,6 +438,69 @@ class Menu:
 
                 except Exception as e:
                     print(f"  -> Greška: {e}")
+
+        elif knjige_dir:
+            # Ako postoje direktoriji, koristi originalnu logiku
+            odabrane = self._batch_odabir([d.name for d in knjige_dir], "Odaberite knjige za čišćenje (ili X za povratak)")
+
+            if odabrane == "x":
+                return
+
+            if not odabrane:
+                print("Nije odabrana nijedna knjiga.")
+                input("Pritisnite Enter za povratak...")
+                return
+
+            print(f"\nOdabrano: {len(odabrane)} knjiga")
+            print("Čišćenje u tijeku...")
+
+            for idx in odabrane:
+                knjiga_dir = knjige_dir[idx]
+                txt_datoteke = list(knjiga_dir.glob("*.txt"))
+
+                if not txt_datoteke:
+                    print(f"\n{knjiga_dir.name}: Nema .txt datoteka za čišćenje.")
+                    continue
+
+                for txt_datoteka in txt_datoteke:
+                    print(f"\nČišćenje: {knjiga_dir.name}/{txt_datoteka.name}")
+
+                    try:
+                        # Učitaj tekst
+                        with open(txt_datoteka, 'r', encoding='utf-8') as f:
+                            tekst = f.read()
+
+                        # Očisti dokument
+                        ocisceni_tekst = self._text_cleaner.ocisti_dokument(tekst, knjiga_dir.name)
+
+                        # Spremi očišćeni tekst
+                        with open(txt_datoteka, 'w', encoding='utf-8') as f:
+                            f.write(ocisceni_tekst)
+
+                        print(f"  -> Očišćeno: {txt_datoteka.name}")
+
+                        # Kreiraj memoriju
+                        memorija = self._text_cleaner.kreiraj_memoriju(ocisceni_tekst)
+                        memorija_putanja = knjiga_dir / "memory.json"
+                        import json
+                        with open(memorija_putanja, 'w', encoding='utf-8') as f:
+                            json.dump(memorija, f, indent=2, ensure_ascii=False)
+                        print(f"  -> Memorija: {memorija_putanja.name}")
+
+                        # Kreiraj book config
+                        book_config = self._text_cleaner.kreiraj_book_config(knjiga_dir.name, "Autor")
+                        config_putanja = knjiga_dir / "config.yaml"
+                        import yaml
+                        with open(config_putanja, 'w', encoding='utf-8') as f:
+                            yaml.dump(book_config, f, default_flow_style=False, allow_unicode=True)
+                        print(f"  -> Config: {config_putanja.name}")
+
+                    except Exception as e:
+                        print(f"  -> Greška: {e}")
+        else:
+            print("Nema .txt datoteka ili knjiga u work/output/")
+            input("Pritisnite Enter za povratak...")
+            return
 
         print("\nČišćenje završeno.")
         input("Pritisnite Enter za povratak...")
