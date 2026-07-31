@@ -18,7 +18,7 @@ if [ ! -d "$VENV_DIR" ]; then
     source "$VENV_DIR/Scripts/activate"
     
     # Nadogradnja pip-a i instalacija potrebnih biblioteka
-    pip install --upgrade pip --quiet
+    pip install --upgrade pip --quiet 2>/dev/null || true
     pip install -r requirements.txt --quiet
     echo "[INFO] Instalacija uspješno završena."
 else
@@ -27,7 +27,7 @@ else
     
     # Provjeri jesu li svi potrebni paketi instalirani
     echo "[INFO] Provjeravam instalirane pakete..."
-    pip install --upgrade pip --quiet
+    pip install --upgrade pip --quiet 2>/dev/null || true
     pip install -r requirements.txt --quiet
     echo "[INFO] Paketi su ažurni."
 fi
