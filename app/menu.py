@@ -194,7 +194,7 @@ class Menu:
         # Inicijaliziraj module
         self._fm = FileManager(config)
         self._doc_proc = DocumentProcessor(config)
-        self._text_cleaner = TextCleaner(config)
+        self._text_cleaner = TextCleaner(config, self._fm)
         self._translator = Translator(config, checkpoint_manager)
         self._tts_engine = TTSEngine(config)
 
