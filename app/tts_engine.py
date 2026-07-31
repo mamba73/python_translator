@@ -1,0 +1,232 @@
+"""
+app/tts_engine.py — TTS sinteza u MP3 sa segmentacijom
+Ref: doc/README_TechDoc.md §10
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from pathlib import Path
+from typing import Any
+from datetime import datetime
+
+import edge_tts
+from mutagen.mp3 import MP3
+from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TCOM
+
+from app.file_manager import FileManager
+
+
+class TTSEngine:
+    """TTS engine za generiranje MP3 datoteka s edge-tts."""
+
+    def __init__(self, config: dict[str, Any], file_manager: FileManager) -> None:
+        self._cfg = config
+        self._fm = file_manager
+        self._tts_cfg = config.get("tts", {})
+        self._segment_cfg = self._tts_cfg.get("segment", {})
+
+    def izracunaj_segmente(self, recenice: list[str]) -> list[list[str]]:
+        """Pre-calculation algoritam za ravnomjernu segmentaciju.
+
+        Args:
+            recenice: Lista rečenica iz poglavlja.
+
+        Returns:
+            Lista segmenata, svaki segment je lista rečenica.
+        """
+        if not recenice:
+            return []
+
+        soft_limit = self._segment_cfg.get("word_limit_soft", 500)
+        hard_limit = self._segment_cfg.get("word_limit_hard", 600)
+
+        # Prebroji riječi po rečenici
+        rijeci_po_recenici = [len(r.split()) for r in recenice]
+        ukupno_rijeci = sum(rijeci_po_recenici)
+
+        # Izračunaj broj segmenata i target po segmentu
+        n_segmenata = max(1, (ukupno_rijeci + soft_limit - 1) // soft_limit)  # ceil
+        target = ukupno_rijeci / n_segmenata
+
+        segmenti = []
+        trenutni_segment = []
+        trenutni_zbroj = 0
+
+        for i, recenica in enumerate(recenice):
+            rijeci_u_recenici = rijeci_po_recenici[i]
+
+            # Ako dodavanje ove rečenice ne bi premašilo hard limit
+            if trenutni_zbroj + rijeci_u_recenici <= hard_limit:
+                trenutni_segment.append(recenica)
+                trenutni_zbroj += rijeci_u_recenici
+
+                # Ako smo dosegli target, zatvori segment (osim ako je zadnja rečenica)
+                if trenutni_zbroj >= target and i < len(recenice) - 1:
+                    segmenti.append(trenutni_segment)
+                    trenutni_segment = []
+                    trenutni_zbroj = 0
+            else:
+                # Premašili bismo hard limit - zatvori trenutni segment
+                if trenutni_segment:
+                    segmenti.append(trenutni_segment)
+                trenutni_segment = [recenica]
+                trenutni_zbroj = rijeci_u_recenici
+
+        # Dodaj zadnji segment ako ima sadržaja
+        if trenutni_segment:
+            segmenti.append(trenutni_segment)
+
+        # Spoji zadnja dva segmenta ako je zadnji premali
+        min_segment_words = self._segment_cfg.get("min_segment_words", 50)
+        if len(segmenti) > 1:
+            zadnji_rijeci = sum(len(r.split()) for r in segmenti[-1])
+            if zadnji_rijeci < min_segment_words:
+                segmenti[-2].extend(segmenti[-1])
+                segmenti.pop()
+
+        return segmenti
+
+    async def generiraj_segment_mp3(self, tekst: str, putanja: Path,
+                                   chapter_num: int, part_num: int,
+                                   book_title: str, author: str) -> None:
+        """Generira MP3 za jedan segment koristeći edge-tts.
+
+        Args:
+            tekst: Tekst segmenta.
+            putanja: Putanja za spremanje MP3.
+            chapter_num: Broj poglavlja.
+            part_num: Broj dijela unutar poglavlja.
+            book_title: Naslov knjige za ID3.
+            author: Autor za ID3.
+        """
+        # Odredi glas na temelju sadržaja (dijalog vs naracija)
+        voice, rate, pitch = self._odredi_glas(tekst)
+
+        communicate = edge_tts.Communicate(tekst, voice, rate=rate, pitch=pitch)
+        await communicate.save(str(putanja))
+
+        # Dodaj ID3 tagove
+        self._upisi_id3_tagove(putanja, chapter_num, part_num, book_title, author)
+
+    def _odredi_glas(self, tekst: str) -> tuple[str, str, str]:
+        """Odredi glas, brzinu i visinu na temelju teksta.
+
+        Args:
+            tekst: Tekst za analizu.
+
+        Returns:
+            (voice, rate, pitch)
+        """
+        narrator_cfg = self._tts_cfg.get("narrator", {})
+        dialog_cfg = self._tts_cfg.get("dialog", {})
+        dramatic_cfg = self._tts_cfg.get("dramatic_mode", {})
+
+        # Default narator
+        voice = narrator_cfg.get("voice", "hr-HR-SreckoNeural")
+        rate = narrator_cfg.get("rate", "+0%")
+        pitch = narrator_cfg.get("pitch", "+0Hz")
+
+        # Detekcija dijaloga
+        if dialog_cfg.get("use_different_voice", True):
+            navodnici = tekst.count('"')
+            if navodnici >= 2:
+                voice = dialog_cfg.get("voice", "hr-HR-GabrijelaNeural")
+                rate = dialog_cfg.get("rate", "+")
+
+        # Dramatski mod
+        if dramatic_cfg.get("enabled", True):
+            keywords = dramatic_cfg.get("keywords_anxious", [])
+            if any(kw.lower() in tekst.lower() for kw in keywords):
+                rate = dramatic_cfg.get("rate_modifier_anxious", "+15%")
+
+        return voice, rate, pitch
+
+    def _upisi_id3_tagove(self, putanja: Path, chapter_num: int, part_num: int,
+                         book_title: str, author: str) -> None:
+        """Upisuje ID3 metapodatke u MP3 datoteku.
+
+        Args:
+            putanja: Putanja do MP3 datoteke.
+            chapter_num: Broj poglavlja.
+            part_num: Broj dijela.
+            book_title: Naslov knjige.
+            author: Autor knjige.
+        """
+        try:
+            audio = MP3(putanja, ID3=ID3)
+
+            # Kreiraj ID3 tag ako ne postoji
+            if audio.tags is None:
+                audio.add_tags()
+
+            # Title: Chapter X — Part Y
+            title = f"Chapter {chapter_num} — Part {part_num}"
+            audio.tags.add(TIT2(encoding=3, text=title))
+
+            # Artist: Author
+            audio.tags.add(TPE1(encoding=3, text=author))
+
+            # Album: Book Title
+            audio.tags.add(TALB(encoding=3, text=book_title))
+
+            # Track: Globalni broj
+            global_track = (chapter_num - 1) * 100 + part_num
+            audio.tags.add(TRCK(encoding=3, text=str(global_track)))
+
+            # Comment: Generator info
+            version = self._cfg.get("project", {}).get("version", "0.4.0")
+            comment = f"Generated by Dynamic Book Translator v{version}"
+            audio.tags.add(TCOM(encoding=3, text=comment))
+
+            audio.save()
+        except Exception as e:
+            logging.warning(f"Neuspješno pisanje ID3 tagova: {e}")
+
+    async def generiraj_audiobook(self, tekst: str, output_dir: Path,
+                                 book_title: str, author: str) -> list[Path]:
+        """Orkestracija: segmenti → MP3 → ID3.
+
+        Args:
+            tekst: Cijeli tekst knjige.
+            output_dir: Direktorij za spremanje MP3.
+            book_title: Naslov knjige.
+            author: Autor knjige.
+
+        Returns:
+            Lista putanja do generiranih MP3 datoteka.
+        """
+        # Podijeli na poglavlja (jednostavna heuristika - po \n\n)
+        poglavlja_tekst = tekst.split('\n\n\n')
+
+        output_dir = self._fm.ensure_dir(output_dir, suffix_if_exists=True)
+
+        global_counter = 1
+        sve_mp3_putanje = []
+
+        for ch_idx, poglavlje in enumerate(poglavlja_tekst, 1):
+            # Podijeli poglavlje na rečenice
+            recenice = re.split(r'(?<=[.!?])\s+', poglavlje)
+
+            # Izračunaj segmente
+            segmenti = self.izracunaj_segmente(recenice)
+
+            for part_idx, segment in enumerate(segmenti, 1):
+                # Imenovanje: NNN_ChXX_partXXX.mp3
+                filename = f"{global_counter:03d}_Ch{ch_idx:02d}_part{part_idx:03d}.mp3"
+                mp3_path = output_dir / filename
+
+                segment_tekst = ' '.join(segment)
+                await self.generiraj_segment_mp3(
+                    segment_tekst, mp3_path, ch_idx, part_idx, book_title, author
+                )
+
+                sve_mp3_putanje.append(mp3_path)
+                global_counter += 1
+
+                logging.info(f"Generiran MP3: {filename}")
+
+        logging.info(f"Ukupno generirano {len(sve_mp3_putanje)} MP3 datoteka.")
+        return sve_mp3_putanje

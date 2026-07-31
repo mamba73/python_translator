@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Putanja i ime: ./start
-# Verzija: 1.0.5
+# Verzija: 2.0.0 - Dynamic Book Translator v0.4
 
 # Naziv virtualnog okruženja
 VENV_DIR="knjige_env"
 
 echo "=================================================="
-echo "    MambaBookVoice v1.0.5 - Pokretanje sustava   "
+echo "  Dynamic Book Translator v0.4 - Pokretanje sustava"
 echo "=================================================="
 
 # 1. Provjera i automatska instalacija virtualnog okruženja (izolacija)
@@ -19,7 +19,7 @@ if [ ! -d "$VENV_DIR" ]; then
     
     # Nadogradnja pip-a i instalacija potrebnih biblioteka
     pip install --upgrade pip
-    pip install edge-tts pypdf python-docx ebooklib
+    pip install -r requirements.txt
     echo "[INFO] Instalacija uspješno završena."
 else
     # Ako okruženje već postoji, aktiviraj ga
@@ -28,12 +28,12 @@ else
     # Provjeri jesu li svi potrebni paketi instalirani
     echo "[INFO] Provjeravam instalirane pakete..."
     pip install --upgrade pip --quiet
-    pip install edge-tts pypdf python-docx ebooklib --quiet
+    pip install -r requirements.txt --quiet
     echo "[INFO] Paketi su ažurni."
 fi
 
 # 2. Pokretanje glavne aplikacije i prosljeđivanje svih argumenata korisnika
-python mamba_voice.py "$@"
+python main.py "$@"
 
 # Deaktivacija virtualnog okruženja po završetku rada
 deactivate
