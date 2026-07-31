@@ -414,11 +414,13 @@ class Menu:
                     # Očisti dokument
                     ocisceni_tekst = self._text_cleaner.ocisti_dokument(tekst, txt_datoteka.stem)
 
-                    # Spremi očišćeni tekst
-                    with open(txt_datoteka, 'w', encoding='utf-8') as f:
+                    # Spremi očišćeni tekst kao novu datoteku s [fixed] sufiksom
+                    naziv = txt_datoteka.stem + "[fixed]" + txt_datoteka.suffix
+                    izlazna_putanja = output_dir / naziv
+                    with open(izlazna_putanja, 'w', encoding='utf-8') as f:
                         f.write(ocisceni_tekst)
 
-                    print(f"  -> Očišćeno: {txt_datoteka.name}")
+                    print(f"  -> Očišćeno: {izlazna_putanja.name}")
 
                     # Kreiraj memoriju
                     memorija = self._text_cleaner.kreiraj_memoriju(ocisceni_tekst)
@@ -473,11 +475,13 @@ class Menu:
                         # Očisti dokument
                         ocisceni_tekst = self._text_cleaner.ocisti_dokument(tekst, knjiga_dir.name)
 
-                        # Spremi očišćeni tekst
-                        with open(txt_datoteka, 'w', encoding='utf-8') as f:
+                        # Spremi očišćeni tekst kao novu datoteku s [fixed] sufiksom
+                        naziv = txt_datoteka.stem + "[fixed]" + txt_datoteka.suffix
+                        izlazna_putanja = knjiga_dir / naziv
+                        with open(izlazna_putanja, 'w', encoding='utf-8') as f:
                             f.write(ocisceni_tekst)
 
-                        print(f"  -> Očišćeno: {txt_datoteka.name}")
+                        print(f"  -> Očišćeno: {izlazna_putanja.name}")
 
                         # Kreiraj memoriju
                         memorija = self._text_cleaner.kreiraj_memoriju(ocisceni_tekst)
