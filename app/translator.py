@@ -7,18 +7,35 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import urllib.request
 import urllib.error
 from typing import Any, Optional
 from datetime import datetime
+from pathlib import Path
 
-from app.utils import unificiraj_navodnike, ocisti_leaked_prijevod, detektiraj_x_tipku
+from app.utils import (
+    unificiraj_navodnike,
+    ocisti_leaked_prijevod,
+    detektiraj_x_tipku,
+    prikazi_progres,
+)
 from app.checkpoint import CheckpointManager
 
 
 class Translator:
-    """Unificirani prevoditelj s podrškom za više API providera."""
+    """Unificirani prevoditelj s podrškom za više API providera.
+
+    Uz osnovno prevođenje, podržava:
+      - Per-book memoriju: učitava `[ime_knjige]_memorija.json` (CHARACTERS,
+        GLOSSARY, GRAMMAR_FIXES) i injektira je u system prompt
+        (CHARACTER GENDER REGISTER blok) — kao u mamba_voice.py.
+      - Detaljan progress bar s brojem riječi (akumulirano/ukupno + %).
+    """
+
+    # Memorija za trenutnu knjigu (CHARACTERS, GLOSSARY, GRAMMAR_FIXES)
+    _UCITANA_MEMORIJA: dict[str, Any] = {}
 
     def __init__(self, config: dict[str, Any], checkpoint_manager: CheckpointManager) -> None:
         self._cfg = config
@@ -27,6 +44,131 @@ class Translator:
         self._trans_cfg = config.get("translation", {})
         self._provider = self._api_cfg.get("provider", "lm_studio")
         self._timeout = self._api_cfg.get("timeout", 120)
+        self._book_system_prompt: str | None = None  # Per-book system prompt iz config.yaml
+        self._memorija_file: str | None = None       # Ime memorija datoteke iz config.yaml
+        self._book_dir: str | None = None            # Direktorij knjige
+        self._book_memorija_id: str | None = None    # ID za prepoznavanje promjene knjige
+
+    # -----------------------------------------------------------------------
+    # Per-book memorija ([ime_knjige]_memorija.json)
+    # -----------------------------------------------------------------------
+
+    def postavi_knjigu(self, book_dir: str, book_config: dict[str, Any] | None = None) -> None:
+        """Postavlja trenutnu knjigu i učitava njezinu memoriju.
+
+        Ekvivalent `postavi_trenutnu_knjigu()` iz mamba_voice.py — umjesto
+        `likovi_memorija.json` koristi `[ime_knjige]_memorija.json` (npr.
+        `Foundation---Isaac-Asimov_memorija.json`).
+
+        Args:
+            book_dir: Putanja do direktorija knjige (work/output/<Knjiga>/).
+            book_config: Per-book config.yaml (opcionalno; sadrži system_prompt
+                i memorija_file).
+        """
+        self._book_dir = book_dir
+        self._book_system_prompt = None
+        self._memorija_file = None
+
+        if book_config:
+            self._book_system_prompt = book_config.get("system_prompt")
+            self._memorija_file = book_config.get("memorija_file")
+
+        memorija_putanja = self._pronadi_memorija_datoteku(book_dir, self._memorija_file)
+
+        # Resetiraj memoriju ako se knjiga promijenila
+        novi_id = f"{book_dir}:{memorija_putanja}"
+        if novi_id != self._book_memorija_id:
+            type(self)._UCITANA_MEMORIJA = {}
+            self._book_memorija_id = novi_id
+
+        if not memorija_putanja or not os.path.exists(memorija_putanja):
+            logging.info("ℹ️ Memorija datoteka ne postoji - koristim standardni system prompt")
+            return
+
+        try:
+            with open(memorija_putanja, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data:
+                type(self)._UCITANA_MEMORIJA = data
+                logging.info(f"✅ Učitano {len(data)} sekcija memorije iz: {memorija_putanja}")
+            else:
+                logging.info("ℹ️ Memorija datoteka je prazna - koristim standardni system prompt")
+        except Exception as e:
+            logging.warning(f"Greška pri učitavanju memorija datoteke: {e}")
+
+    def _generiraj_system_prompt(self) -> str:
+        """Generira finalni system prompt s opcionalnim injektom memorije.
+
+        Ekvivalent `generiraj_system_prompt_sa_likovima()` iz mamba_voice.py —
+        formatira memoriju (CHARACTERS + GLOSSARY + GRAMMAR_FIXES) u STRICT
+        blok i dodaje ga ispred per-book (ili default) system prompt-a.
+
+        Returns:
+            Modificirani system prompt string (s memorijom ili bez).
+        """
+        base_prompt = self._book_system_prompt or self._generiraj_default_system_prompt()
+        memorija = type(self)._UCITANA_MEMORIJA
+
+        if not memorija:
+            return base_prompt
+
+        linije: list[str] = []
+
+        # CHARACTERS -> CHARACTER GENDER REGISTER
+        characters = memorija.get("CHARACTERS") or {}
+        for ime, opis in characters.items():
+            linije.append(f"{ime}: {opis}")
+
+        # GLOSSARY -> pojam = prijevod
+        glossary = memorija.get("GLOSSARY") or {}
+        for pojam, prijevod in glossary.items():
+            linije.append(f"{pojam} = {prijevod} (GLOSSARY)")
+
+        # GRAMMAR_FIXES -> naziv: pravilo
+        grammar = memorija.get("GRAMMAR_FIXES") or {}
+        for naziv, pravilo in grammar.items():
+            linije.append(f"{naziv}: {pravilo} (GRAMMAR_FIXES)")
+
+        if not linije:
+            return base_prompt
+
+        memorijski_blok = (
+            "CHARACTER GENDER REGISTER (STRICT DIRECTIVE):\n"
+            "For the duration of this text, adhere to these strictly locked character profiles:\n"
+            + "\n".join(linije) + "\n"
+            + "-" * 80 + "\n"
+        )
+
+        logging.debug(f"Injektovan memorijski blok u system prompt ({len(linije)} stavki)")
+        return memorijski_blok + base_prompt
+
+    @staticmethod
+    def _pronadi_memorija_datoteku(book_dir: str, memorija_file: str | None) -> str | None:
+        """Pronalazi `[ime_knjige]_memorija.json` u direktoriju knjige.
+
+        Prvo koristi `memorija_file` iz config.yaml; ako nije definiran, traži
+        bilo koju `*_memorija.json` datoteku u book_dir.
+
+        Args:
+            book_dir: Putanja do direktorija knjige.
+            memorija_file: Ime memorija datoteke iz config.yaml (opcionalno).
+
+        Returns:
+            Apsolutna putanja do memorija datoteke ili None.
+        """
+        dir_path = Path(book_dir)
+        if not dir_path.exists() or not dir_path.is_dir():
+            return None
+
+        if memorija_file:
+            kandidat = dir_path / memorija_file
+            if kandidat.exists():
+                return str(kandidat)
+
+        for kandidat in dir_path.glob("*_memorija.json"):
+            return str(kandidat)
+
+        return None
 
     # -----------------------------------------------------------------------
     # Javne metode za prevođenje
@@ -35,9 +177,12 @@ class Translator:
     def prevedi_segment(self, tekst: str, system_prompt: str | None = None) -> str:
         """Unificirana metoda za prevođenje segmenta (odlomak/paragraf/rečenica).
 
+        Ako system_prompt nije proslijeđen, koristi memoriju knjige
+        (CHARACTER GENDER REGISTER) iz `_generiraj_system_prompt()`.
+
         Args:
             tekst: Tekst za prevođenje.
-            system_prompt: Opcionalni system prompt (ako None, koristi default).
+            system_prompt: Opcionalni system prompt (ako None, koristi memoriju/default).
 
         Returns:
             Prevedeni tekst.
@@ -50,7 +195,7 @@ class Translator:
             return tekst
 
         if system_prompt is None:
-            system_prompt = self._generiraj_default_system_prompt()
+            system_prompt = self._generiraj_system_prompt()
 
         response = self._api_call(
             messages=[
@@ -67,7 +212,10 @@ class Translator:
 
     def prevedi_knjigu(self, tekst: str, output_path: str, book_id: str,
                       granularnost: str = "paragraph") -> tuple[str, bool]:
-        """Produkcijski prijevod cijele knjige s checkpointingom.
+        """Produkcijski prijevod cijele knjige s checkpointingom i detaljnim progressom.
+
+        Progress bar prikazuje broj riječi (akumulirano/ukupno + %) kao u
+        mamba_voice.py. Koristi per-book memoriju iz `postavi_knjigu()`.
 
         Args:
             tekst: Cijeli tekst knjige.
@@ -86,17 +234,30 @@ class Translator:
         else:
             segmenti = [tekst]  # Odlomak - cijeli tekst
 
+        # Očisti prazne segmente
+        segmenti = [s.strip() for s in segmenti if s.strip()]
+
+        if not segmenti:
+            return "", False
+
         ukupno = len(segmenti)
-        prevedeni = []
+        ukupno_rijeci = sum(len(s.split()) for s in segmenti)
+        akumulirane_rijeci = 0
+        je_prekinuto = False
+        prevedeni: list[str] = []
 
         for idx, segment in enumerate(segmenti):
+            rijeci_u_segmentu = len(segment.split())
+
             # Detekcija prekida
             if detektiraj_x_tipku():
                 akcija = self._prikazi_prekid_meni()
                 if akcija == "finish":
+                    je_prekinuto = True
                     break
                 elif akcija == "abort":
                     return "", True
+                # "continue" - nastavi normalno
 
             # Prevođenje
             try:
@@ -106,6 +267,8 @@ class Translator:
                 logging.error(f"Greška pri prevođenju segmenta {idx + 1}/{ukupno}: {e}")
                 prevedeni.append(segment)  # Fallback na original
 
+            akumulirane_rijeci += rijeci_u_segmentu
+
             # Checkpoint
             self._cp.spremi_checkpoint({
                 "book_id": book_id,
@@ -114,25 +277,28 @@ class Translator:
                 "output_path": output_path
             })
 
-            # Progress
-            from app.utils import prikazi_progres
-            prikazi_progres(idx + 1, ukupno, f"Segment {idx + 1}/{ukupno}")
+            # Progress s brojem riječi
+            dodatno = ""
+            if ukupno_rijeci > 0:
+                postotak = int(akumulirane_rijeci / ukupno_rijeci * 100)
+                dodatno = f"riječi: {akumulirane_rijeci}/{ukupno_rijeci} ({postotak}%)"
+            prikazi_progres(idx + 1, ukupno, f"Segment {idx + 1}/{ukupno}", dodatno)
 
         # Spremanje
         final_tekst = '\n\n'.join(prevedeni) if granularnost == "paragraph" else ' '.join(prevedeni)
-        self._cp.atomic_write(output_path, final_tekst)
 
-        # Čišćenje checkpointa
-        self._cp.obrisi_checkpoint(book_id)
+        if not je_prekinuto:
+            self._cp.atomic_write(output_path, final_tekst)
+            self._cp.obrisi_checkpoint(book_id)
 
-        return final_tekst, False
+        return final_tekst, je_prekinuto
 
     def prevedi_test(self, tekst: str, granularnost: str = "paragraph",
                      kolicina: int = 1, header: bool = True) -> str:
         """Testni prijevod s opcionalnim headerom.
 
         Vraća prevedeni tekst (s opcionalnim headerom) — pozivatelj
-        sam sprema u željeni direktorij.
+        sam sprema u željeni direktorij. Koristi per-book memoriju.
 
         Args:
             tekst: Izvorni tekst.
@@ -151,8 +317,22 @@ class Translator:
         else:
             segmenti = [tekst]
 
-        segmenti = segmenti[:kolicina]
-        prevedeni = [self.prevedi_segment(seg) for seg in segmenti]
+        segmenti = [s.strip() for s in segmenti if s.strip()][:kolicina]
+
+        # Test prijevod s progress barom (broj riječi)
+        ukupno_rijeci = sum(len(s.split()) for s in segmenti)
+        akumulirane_rijeci = 0
+        prevedeni = []
+        for i, seg in enumerate(segmenti):
+            prijevod = self.prevedi_segment(seg)
+            prevedeni.append(prijevod)
+            akumulirane_rijeci += len(seg.split())
+            dodatno = ""
+            if ukupno_rijeci > 0:
+                postotak = int(akumulirane_rijeci / ukupno_rijeci * 100)
+                dodatno = f"riječi: {akumulirane_rijeci}/{ukupno_rijeci} ({postotak}%)"
+            prikazi_progres(i + 1, len(segmenti),
+                            f"Segment {i + 1}/{len(segmenti)}", dodatno)
 
         # Spremanje
         output = []

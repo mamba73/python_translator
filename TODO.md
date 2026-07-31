@@ -52,7 +52,7 @@
 
 ---
 
-## FAZA 3 — Funkcionalni moduli (migracija iz `mamba_voice.py`) ✅
+## FAZA 3 — Funkcionalni moduli (migracija iz `mamba_voice.py`) ⚠️
 
 - [x] `app/document_processor.py`
   - [x] `ucitaj_izvorni_tekst()` — migrirati (.pdf, .docx, .txt, .epub, .mobi)
@@ -69,7 +69,7 @@
   - [x] `_api_call(messages, config)` — privatna metoda, objedinjuje duplikat koda
   - [x] `_build_payload()` — gradi API payload
   - [x] Adaptori po provideru: `lm_studio`, `ollama_local`, `ollama_cloud`, `openai`, `gemini`, `qwen`, `custom`
-  - [x] `detektiraj_aktivni_model()` — migrirati
+  - [ ] `detektiraj_aktivni_model()` — **NEDOVRŠENO** (poziva `_detect_lm_studio_model`/`_detect_ollama_model` koje NE POSTOJE → AttributeError)
   - [x] `je_strukturni_ili_kratak()` — migrirati
   - [x] `generiraj_system_prompt_sa_memorijom()` — proširiti na CHARACTERS + GLOSSARY + GRAMMAR_FIXES
   - [x] `prevedi_segment()` — unificirana metoda za odlomak/paragraf/rečenicu
@@ -111,20 +111,23 @@
 
 ---
 
-## FAZA 5 — Integracija i `main.py` ✅
+## FAZA 5 — Integracija i `main.py` ⚠️
 
 - [x] `main.py` — čisti orkestrator, samo pozivi modula iz `app/`
-- [x] Checkpoint blok na vrhu glavnog izbornika — 1-click nastavak
+- [ ] Checkpoint blok na vrhu glavnog izbornika — **NEDOVRŠENO** (blok se prikazuje, ali `Menu.run()` ne rukuje `resume:` → nastavak ne radi; `prevedi_knjigu()` nema `resume_from` parametar)
 - [x] BRZI TEST (`Y`) — 1-click pokretanje iz `last_test.json`
 - [x] Batch odabir: `1`, `1,3,5`, `1-5`, `*` — u svim fazama
 - [x] Per-book `config.yaml` — kreirati pri prvoj obradi ako ne postoji
 - [x] TEST output → `<naziv>_test_<timestamp>.txt` (header po opciji)
 - [x] Produkcija output → `<naziv>.txt` (uvijek čisti tekst)
-- [x] Produkcija statistike → `<naziv>_stats.txt` (opcionalno)
+- [ ] Produkcija statistike → `<naziv>_stats.txt` — **NEDOSTAJE** (nije generirana; TechDoc §9.5 zahtijeva zasebnu datoteku s parametrima, brojem riječi/znakova, brzinom)
 
 ---
 
-## FAZA 6 — Poliranje i verifikacija ✅
+## FAZA 6 — Poliranje i verifikacija ⚠️
+
+- [ ] TTS "Jedna datoteka" (`merge_single`) — **NEDOVRŠENO** (`tts_engine.py` ima TODO placeholder; vraća sve segmente umjesto spojene MP3)
+- [ ] Trorazinsko logiranje — **NEDOVRŠENO** (`log_verbatim()`/`log_llm_response()` definirane u `logger.py` ali se NE POZIVAJU nigdje u kodu; samo osnovna razina aktivna)
 
 - [x] Zamijeniti sve globalne varijable s instance atributima klasa
 - [x] Ukloniti `mamba_voice.py` nakon što su svi moduli migrirani i verificirani

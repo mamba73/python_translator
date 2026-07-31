@@ -1089,6 +1089,9 @@ class Menu:
                 with open(config_putanja, 'r', encoding='utf-8') as f:
                     book_config = yaml.safe_load(f)
 
+            # Postavi knjigu i učitaj memoriju ([ime_knjige]_memorija.json)
+            self._translator.postavi_knjigu(str(knjiga_dir), book_config)
+
             prijevod = self._translator.prevedi_test(
                 tekst,
                 granularnost=last_test.get("granularnost", "paragraph"),
@@ -1237,6 +1240,9 @@ class Menu:
                 with open(config_putanja, 'r', encoding='utf-8') as f:
                     book_config = yaml.safe_load(f)
 
+            # Postavi knjigu i učitaj memoriju ([ime_knjige]_memorija.json)
+            self._translator.postavi_knjigu(str(knjiga_dir), book_config)
+
             # Pozovi translator za TEST prijevod
             prijevod = self._translator.prevedi_test(
                 tekst,
@@ -1363,6 +1369,9 @@ class Menu:
                 with open(config_putanja, 'r', encoding='utf-8') as f:
                     book_config = yaml.safe_load(f)
 
+            # Postavi knjigu i učitaj memoriju ([ime_knjige]_memorija.json)
+            self._translator.postavi_knjigu(str(knjiga_dir), book_config)
+
             # Spremi produkcijski prijevod u work/translated/<Knjiga>/
             translated_dir = Path(self._cfg["directories"]["translated"])
             translated_book_dir = self._fm.book_output_dir(
@@ -1372,14 +1381,17 @@ class Menu:
             translated_book_dir = self._fm.ensure_dir(translated_book_dir, suffix_if_exists=True)
 
             # Pozovi translator za produkcijski prijevod
-            prijevod = self._translator.prevedi_knjigu(
+            prijevod, je_prekinuto = self._translator.prevedi_knjigu(
                 tekst,
                 output_path=str(translated_book_dir / f"{knjiga_dir.name}.txt"),
                 book_id=f"{knjiga_dir.name}_fixed",
                 granularnost=self._opcije["granularnost"]
             )
 
-            print(f"Produkcijski prijevod spremljen: {translated_book_dir / f'{knjiga_dir.name}.txt'}")
+            if je_prekinuto:
+                print(f"Produkcijski prijevod prekinut - prevedeni dio spremljen: {translated_book_dir / f'{knjiga_dir.name}.txt'}")
+            else:
+                print(f"Produkcijski prijevod spremljen: {translated_book_dir / f'{knjiga_dir.name}.txt'}")
 
         except Exception as e:
             print(f"Greška pri produkcijskom prijevodu: {e}")
