@@ -196,7 +196,7 @@ class Menu:
         self._doc_proc = DocumentProcessor(config)
         self._text_cleaner = TextCleaner(config, self._fm)
         self._translator = Translator(config, checkpoint_manager)
-        self._tts_engine = TTSEngine(config)
+        self._tts_engine = TTSEngine(config, self._fm)
 
     # -----------------------------------------------------------------------
     # Glavni entry point
