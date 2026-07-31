@@ -4,22 +4,22 @@
 
 ---
 
-## FAZA 1 — Struktura direktorija i konfiguracija
+## FAZA 1 — Struktura direktorija i konfiguracija ✅
 
-- [ ] Kreirati `app/` direktorij (prazni moduli kao placeholder)
-- [ ] Kreirati `work/input/`
-- [ ] Kreirati `work/output/`
-- [ ] Kreirati `work/translated/`
-- [ ] Kreirati `work/audiobooks/`
-- [ ] Kreirati `work/state/`
-- [ ] Kreirati `work/logs/`
-- [ ] Kreirati `config/settings.yaml` — migrirati iz `config/settings.py`
-- [ ] Kreirati `config/profile_sf_literature.yaml`
-- [ ] Kreirati `config/profile_it_technical.yaml`
-- [ ] Kreirati `config/profile_general.yaml`
-- [ ] Kreirati `.env.example` (prazni ključevi: OPENAI, GEMINI, QWEN, OLLAMA, CUSTOM)
-- [ ] Dodati `.env` i `work/` u `.gitignore`
-- [ ] Ažurirati `requirements.txt` — dodati `pyyaml`, `python-dotenv`, `mutagen`
+- [x] Kreirati `app/` direktorij (prazni moduli kao placeholder)
+- [x] Kreirati `work/input/`
+- [x] Kreirati `work/output/`
+- [x] Kreirati `work/translated/`
+- [x] Kreirati `work/audiobooks/`
+- [x] Kreirati `work/state/`
+- [x] Kreirati `work/logs/`
+- [x] Kreirati `config/settings.yaml` — migrirati iz `config/settings.py`
+- [x] Kreirati `config/profile_sf_literature.yaml`
+- [x] Kreirati `config/profile_it_technical.yaml`
+- [x] Kreirati `config/profile_general.yaml`
+- [x] Kreirati `.env.example` (prazni ključevi: OPENAI, GEMINI, QWEN, OLLAMA, CUSTOM)
+- [x] Dodati `.env` i `work/` u `.gitignore`
+- [x] Ažurirati `requirements.txt` — dodati `pyyaml`, `python-dotenv`, `mutagen`
 
 ---
 

@@ -1,0 +1,143 @@
+# =============================================================================
+# Dynamic Book Translator — Globalne postavke
+# Ref: doc/README_TechDoc.md §5.2
+# =============================================================================
+
+project:
+  name: "Dynamic Book Translator"
+  version: "0.4.0"
+
+# -----------------------------------------------------------------------------
+# Direktoriji (relativno od root projekta)
+# -----------------------------------------------------------------------------
+directories:
+  work:        "./work"
+  input:       "./work/input"
+  output:      "./work/output"
+  translated:  "./work/translated"
+  audiobooks:  "./work/audiobooks"
+  state:       "./work/state"
+  logs:        "./work/logs"
+  config:      "./config"
+
+# -----------------------------------------------------------------------------
+# API — aktivni provider i per-provider konfiguracija
+# API ključevi se čitaju iz .env datoteke, NIKAD ovdje
+# Ref: doc/README_TechDoc.md §15
+# -----------------------------------------------------------------------------
+api:
+  provider: "lm_studio"     # lm_studio | ollama_local | ollama_cloud | openai | gemini | qwen | custom
+  auto_detect_model: true
+  timeout: 120
+
+  providers:
+    lm_studio:
+      base_url: "http://127.0.0.1:1234/v1"
+      model: ""               # prazno = auto-detect
+    ollama_local:
+      base_url: "http://127.0.0.1:11434/api"
+      model: "llama3.2"
+    ollama_cloud:
+      base_url: "https://api.ollama.ai/v1"
+      model: "llama3.2"
+      key_env: "OLLAMA_API_KEY"
+    openai:
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4o"
+      key_env: "OPENAI_API_KEY"
+    gemini:
+      base_url: "https://generativelanguage.googleapis.com/v1beta"
+      model: "gemini-1.5-pro"
+      key_env: "GEMINI_API_KEY"
+    qwen:
+      base_url: "https://dashscope.aliyuncs.com/api/v1"
+      model: "qwen-turbo"
+      key_env: "QWEN_API_KEY"
+    custom:
+      base_url: ""
+      model: ""
+      key_env: "CUSTOM_API_KEY"
+
+# -----------------------------------------------------------------------------
+# Prevođenje — parametri modela i granularnost
+# Ref: doc/README_TechDoc.md §9
+# -----------------------------------------------------------------------------
+translation:
+  temperature:      0.25
+  max_tokens:       4000
+  top_p:            0.80
+  min_p:            0.05
+  top_k:            15
+  repeat_penalty:   1.20
+  min_words_for_llm: 4
+  disable_reasoning: true
+  scan_pages_limit:  30
+  header_footer_threshold: 0.40
+
+  # OPCIJE — zajedničke za TEST i produkciju (ref: TechDoc §13.5)
+  test_header:      true       # DA/NE — header u testnoj datoteci
+  granularity:      "paragraph" # odlomak | paragraf | recenica
+  default_count:    1           # defaultna količina za BRZI TEST
+
+# -----------------------------------------------------------------------------
+# Logiranje
+# Ref: doc/README_TechDoc.md §14
+# -----------------------------------------------------------------------------
+logging:
+  verbatim:       false
+  llm_responses:  false
+  enable_reasoning: false
+
+# -----------------------------------------------------------------------------
+# TTS — glasovi i segmentacija
+# Ref: doc/README_TechDoc.md §10
+# -----------------------------------------------------------------------------
+tts:
+  engine: "edge-tts"
+
+  narrator:
+    voice: "hr-HR-SreckoNeural"
+    rate:  "+0%"
+    pitch: "+0Hz"
+
+  dialog:
+    use_different_voice: true
+    voice: "hr-HR-GabrijelaNeural"
+    rate:  "+2%"
+    pitch: "+0Hz"
+
+  dramatic_mode:
+    enabled: true
+    keywords_anxious:
+      - "run"
+      - "explosion"
+      - "danger"
+      - "dead"
+      - "weapon"
+      - "fast"
+      - "shot"
+      - "kill"
+      - "attack"
+      - "terror"
+    rate_modifier_anxious: "+15%"
+
+  # Segmentacija MP3 — ref: doc/README_TechDoc.md §10.5
+  segment:
+    word_limit_soft:  500   # ciljana veličina segmenta (za izračun n)
+    word_limit_hard:  600   # apsolutni maksimum (tolerancija za rez na granici rečenice)
+    min_segment_words: 50   # ispod ovog spoji s pretposljednjim (ako je moguće)
+
+# -----------------------------------------------------------------------------
+# Sanitizacija naziva datoteka
+# -----------------------------------------------------------------------------
+sanitization:
+  replace_spaces_with: "-"
+  prefix_padding: 3
+
+# -----------------------------------------------------------------------------
+# Regex uzorci za detekciju poglavlja
+# -----------------------------------------------------------------------------
+chapter_patterns:
+  - "^(CHAPTER|Chapter|POGLAVLJE|Poglavlje)\\s+\\d+"
+  - "^(EPILOGUE|PROLOGUE|Epilogue|Prologue)"
+  - "^[A-Z\\s]{4,25}$"
