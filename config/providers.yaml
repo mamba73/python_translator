@@ -25,8 +25,19 @@ models:
     model: "gemini-2.0-flash"
     key_env: "GEMINI_API_KEY"
 
+  - title: "Gemini (3.0 Flash)"
+    provider: "gemini"
+    model: "gemini-3-flash-preview"
+    key_env: "GEMINI_API_KEY"
+
   - title: "Qwen (DashScope)"
     provider: "openai"
     model: "qwen-turbo"
     apiBase: "https://aliyuncs.com"
+    key_env: "QWEN_API_KEY"
+
+  - title: "Qwen (International API)"
+    provider: "openai"
+    model: "qwen3-coder-plus"
+    apiBase: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     key_env: "QWEN_API_KEY"
