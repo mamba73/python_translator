@@ -29,6 +29,39 @@ except ImportError:
     _MOBI_AVAILABLE = False
 
 
+# ================================================================================
+# DINAMIČKA KONFIGURACIJA ZA ČIŠĆENJE SPECIFIČNOG TEHNIČKOG ŠUMA (HEADERS / FOOTERS)
+# ================================================================================
+# Ovdje dodaješ regularne izraze (regex) za knjige koje imaju specifičan šum.
+# Uzorci se automatski brišu iz teksta u prvoj sekundi čitanja, prije analize.
+# --------------------------------------------------------------------------------
+DINAMICKI_REGE_FILTERI = [
+    # [DUNE / DINA] - Čisti: file:///F|/rah/...txt (221 of 274) [1/14/03 7:28:46 PM]
+    r'file:///.*?\.txt\s*\(\d+\s+of\s+\d+\)\s*\[.*?\]',
+    
+    # [DUNE / DINA] - Čisti preostale čiste putanje u idućem retku
+    r'file:///.*?\.txt',
+    
+    # [OPĆENITO] - Uklanja agresivne separatorske linije koje razdvajaju stranice
+    r'={5,}',
+    r'-{5,}',
+    
+    # <-- SLJEDEĆI FILTER LOGIČKI DOLEPIŠ OVDJE U BUDUĆNOSTI (pazi na zarez na kraju!)
+]
+# ================================================================================
+
+
+def ocisti_lokalni_i_dinamicki_pdf_sum(tekst: str) -> str:
+    """Prolazi kroz sve dinamičke konfiguracijske filtre i kirurški čisti šum."""
+    if not tekst or not DINAMICKI_REGE_FILTERI:
+        return tekst
+
+    for uzorak in DINAMICKI_REGE_FILTERI:
+        tekst = re.sub(uzorak, '', tekst, flags=re.IGNORECASE)
+        
+    return tekst
+
+
 class DocumentProcessor:
     """Klasa za učitavanje, analizu i segmentaciju dokumenata."""
 
@@ -52,7 +85,7 @@ class DocumentProcessor:
 
         if ekstenzija == '.txt':
             with open(putanja_knjige, 'r', encoding='utf-8') as f:
-                return f.read()
+                return ocisti_lokalni_i_dinamicki_pdf_sum(f.read())
         elif ekstenzija == '.docx':
             doc = Document(putanja_knjige)
             return "\n".join([p.text for p in doc.paragraphs])
@@ -62,7 +95,7 @@ class DocumentProcessor:
             for stranica in reader.pages:
                 t = stranica.extract_text()
                 if t:
-                    dijelovi.append(t)
+                    dijelovi.append(ocisti_lokalni_i_dinamicki_pdf_sum(t))
             return "\n".join(dijelovi)
         elif ekstenzija == '.epub':
             if not _EPUB_AVAILABLE:
@@ -115,7 +148,8 @@ class DocumentProcessor:
 
         if ekstenzija == '.txt':
             with open(putanja_knjige, 'r', encoding='utf-8') as f:
-                return f.read(), {}, []
+                cisti_sadrzaj = ocisti_lokalni_i_dinamicki_pdf_sum(f.read())
+                return cisti_sadrzaj, {}, []
         elif ekstenzija == '.docx':
             doc = Document(putanja_knjige)
             pun_tekst = "\n".join([p.text for p in doc.paragraphs])
@@ -143,6 +177,10 @@ class DocumentProcessor:
             tekst_stranice = reader.pages[i].extract_text()
             if not tekst_stranice:
                 continue
+
+            # Prije frekvencijske analize očisti unikatni dinamički šum
+            tekst_stranice = ocisti_lokalni_i_dinamicki_pdf_sum(tekst_stranice)
+
             redovi = [r.strip() for r in tekst_stranice.split('\n') if r.strip()]
             if redovi:
                 vrhovi_stranica.append(redovi[0])
@@ -175,6 +213,9 @@ class DocumentProcessor:
             if not tekst_stranice:
                 continue
 
+            # Presretanje i brisanje dinamičkih i file:// oznaka na razini stranice
+            tekst_stranice = ocisti_lokalni_i_dinamicki_pdf_sum(tekst_stranice)
+
             redovi = tekst_stranice.split('\n')
             novi_redovi: list[str] = []
             for r in redovi:
@@ -193,13 +234,7 @@ class DocumentProcessor:
     def segmentiraj_poglavlja(self, tekst: str) -> list[dict[str, str]]:
         """Razbija očišćeni tekst na poglavlja koristeći konfiguracijske uzorke.
 
-        Čuva strukturu odlomaka unutar svakog poglavlja (\\n prijelomi se zadržavaju).
-
-        Args:
-            tekst: Očišćeni tekst knjige.
-
-        Returns:
-            Lista poglavlja, svako s "naslov" i "sadrzaj" (s očuvanim odlomcima).
+        Čuva strukturu odlomaka unutar svakog poglavlja.
         """
         redovi = tekst.split('\n')
         poglavlja: list[dict[str, str]] = []

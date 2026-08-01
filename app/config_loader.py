@@ -28,6 +28,20 @@ _CHAR_MAP = str.maketrans("čćšđžŽŠĐČĆ", "ccsdzZSDCC")
 
 
 # ---------------------------------------------------------------------------
+# Pomoćna funkcija za višelinični stil ("|") u YAML-u
+# ---------------------------------------------------------------------------
+def _literal_presenter(dumper: yaml.Dumper, data: str) -> yaml.ScalarNode:
+    """Prisili PyYAML da stringove koji sadrže novi red (\n) piše u bloku '|'."""
+    if '\n' in data:
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
+    return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+
+# Registriramo reprezentator u tvornički SafeDumper i standardni Dumper
+yaml.SafeDumper.add_representer(str, _literal_presenter)
+yaml.Dumper.add_representer(str, _literal_presenter)
+
+
+# ---------------------------------------------------------------------------
 # Javne funkcije
 # ---------------------------------------------------------------------------
 
@@ -49,7 +63,7 @@ def load_global_config() -> dict[str, Any]:
     # Ubaci CHAR_MAP koji se ne može pohraniti u YAML
     cfg.setdefault("_internal", {})["char_map"] = _CHAR_MAP
 
-    # Popuni api_key za aktivni provider iz .env
+    # Popuni api_key for aktivni provider iz .env
     cfg = _inject_api_keys(cfg)
 
     # Normaliziraj direktorije na apsolutne putanje
@@ -139,11 +153,16 @@ def save_settings(cfg: dict[str, Any]) -> None:
 
     tmp = str(_SETTINGS_FILE) + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        yaml.dump(clean, f, allow_unicode=True, default_flow_style=False,
-                  sort_keys=False)
+        yaml.dump(
+            clean, 
+            f, 
+            Dumper=yaml.SafeDumper,  # Koristi ugrađeni dumper s našim literal filtrom
+            allow_unicode=True, 
+            default_flow_style=False,
+            sort_keys=False
+        )
     os.replace(tmp, _SETTINGS_FILE)
     logging.debug("config/settings.yaml ažuriran (api_key polja nisu zapisana).")
-
 
 
 def create_book_config(book_dir: Path | str,
@@ -193,8 +212,35 @@ def create_book_config(book_dir: Path | str,
     config_path = book_dir / "config.yaml"
 
     with open(config_path, "w", encoding="utf-8") as f:
-        yaml.dump(book_cfg, f, allow_unicode=True, default_flow_style=False,
-                  sort_keys=False)
+        yaml.dump(
+            book_cfg, 
+            f, 
+            Dumper=yaml.SafeDumper,  # Čisti i sigurni višelinični upis za knjige
+            allow_unicode=True, 
+            default_flow_style=False,
+            sort_keys=False
+        )
+
+
+    memorija_path = book_dir / book_cfg["memorija_file"]
+    if not memorija_path.exists():
+        predefinirana_memorija = {
+            "CHARACTERS": {
+                "ExampleCharacter": "Define character gender rules here (e.g. 'Treat strictly as MASCULINE grammar... Never switch to feminine')."
+            },
+            "GLOSSARY": {
+                "example term": "primjer prijevoda"
+            },
+            "GRAMMAR_FIXES": {
+                "refleks_jata": "Strictly follow standard Croatian ijekavica. Ensure words like 'bjesnio', 'sjena', 'vrijeme', 'rujan' are spelled correctly. Completely avoid Ekavica or regional variations like 'besnio', 'naucni', 'univerzitet'.",
+                "infinitives": "Strictly use standard Croatian infinitive forms ending in '-ti' or '-ći' in all phrases where right or intent is expressed. Completely avoid the regional 'da + present' syntax.",
+                "names": "Keep foreign names in their original spelling (e.g., 'John Campbell', 'Paul Atreides'). Do not use phonetic Serbian spelling conventions."
+            }
+        }
+        with open(memorija_path, "w", encoding="utf-8") as json_f:
+            json.dump(predefinirana_memorija, json_f, indent=2, ensure_ascii=False)
+        logging.info(f"Kreiran glosar s predefiniranim pravilima: {memorija_path}")
+         
 
     logging.info(f"Kreiran book config: {config_path}")
     return book_cfg

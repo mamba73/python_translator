@@ -4,6 +4,7 @@ app/text_cleaner.py — Čišćenje tehničkog šuma iz ulaznih tekstualnih dato
 Ovaj modul prima sirove .txt datoteke i uklanja:
   - HTML entitete (&nbsp;, \xa0, <br>, <br/>, itd.)
   - Sve HTML/XML tagove
+  - Ponavljajuće headere i footere (sistemske putanje, brojeve stranica, vremenske žigove)
   - Višestruke prazne redove (sažima na točno jedan prazan red između odlomaka)
   - Prekidane rečenice unutar odlomka (spaja u kontinuirani redak)
 """
@@ -11,29 +12,87 @@ Ovaj modul prima sirove .txt datoteke i uklanja:
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
+
+
+def ukloni_sistemski_i_paginacijski_sum(tekst: str) -> str:
+    """
+    Kirurški uklanja specifične file:// linkove, vremenske oznake, 
+    te detektira i čisti ponavljajuće headere/footere s brojevima stranica.
+    """
+    if not tekst:
+        return ""
+
+    # 1. Čišćenje specifičnih lokalnih HTML/TXT dump URL-ova s timestampom i brojem stranica
+    # Primjer: file:///F|/rah/Herbert,%20Frank/Dune%201%20-%20Dune.txt (221 of 274) [1/14/03 7:28:46 PM]
+    tekst = re.sub(r'file:///.*?\.txt\s*\(\d+\s+of\s+\d+\)\s*\[.*?\]', '', tekst, flags=re.IGNORECASE)
+    
+    # 2. Uklanjanje čistih file URL-ova bez zagrada koji se ponavljaju u idućem retku
+    tekst = re.sub(r'file:///.*?\.txt', '', tekst, flags=re.IGNORECASE)
+
+    # 3. Uklanjanje agresivnih separator linija koje razdvajaju stranice u starim dumpovima
+    # Primjer: ===========================
+    tekst = re.sub(r'={5,}', '', tekst)
+    tekst = re.sub(r'-{5,}', '', tekst)
+
+    # 4. Dinamički algoritam za detekciju i uklanjanje ponavljajućih headera/footera i brojeva stranica
+    # Razbijamo tekst na retke kako bismo analizirali uzorke na granicama stranica
+    retci = tekst.split('\n')
+    očišćeni_retci = []
+
+    # Regex uzorci za uobičajene formate brojeva stranica (Page 1, - 1 -, [1], izolirani brojevi na dnu/vrhu)
+    regex_stranica = [
+        r'^\s*page\s+\d+\s*$',
+        r'^\s*stranica\s+\d+\s*$',
+        r'^\s*-\s*\d+\s*-\s*$',
+        r'^\s*\[\s*\d+\s*\]\s*$',
+        r'^\s*\d+\s+of\s+\d+\s*$',
+        r'^\s*\d+\s*$'  # Samostalni izolirani broj u retku
+    ]
+    
+    kompilirani_uzorci = [re.compile(patern, re.IGNORECASE) for patern in regex_stranica]
+
+    for linija in retci:
+        linija_strip = linija.strip()
+        
+        # Ako je redak prazan, preskoči brze provjere
+        if not linija_strip:
+            očišćeni_retci.append(linija)
+            continue
+
+        # Provjera poklapa li se redak s nekim od standardnih formata brojeva stranica
+        je_broj_stranice = any(uzorak.match(linija_strip) for uzorak in kompilirani_uzorci)
+        if je_broj_stranice:
+            continue  # Preskačemo i eliminiramo taj redak
+
+        očišćeni_retci.append(linija)
+
+    return "\n".join(očišćeni_retci)
 
 
 def ocisti_html_i_paragrafe(sirovi_tekst: str) -> str:
-    """Čisti HTML entitete, tagove i normalizira višestruke prazne redove."""
+    """Čisti HTML entitete, tagove, tehnički šum stranica i normalizira višestruke prazne redove."""
     if not sirovi_tekst:
         return ""
     
-    # 1. Čišćenje specifičnih HTML entiteta i skrivenih razmaka
-    tekst = sirovi_tekst.replace('\xa0', ' ')
+    # 1. Prvo pokrećemo napredno čišćenje sistemskog šuma, file linkova i brojeva stranica
+    tekst = ukloni_sistemski_i_paginacijski_sum(sirovi_tekst)
+    
+    # 2. Čišćenje specifičnih HTML entiteta i skrivenih razmaka
+    tekst = tekst.replace('\xa0', ' ')
     tekst = tekst.replace(' ', ' ')
     tekst = re.sub(r'<br\s*/?>', '\n', tekst)
     
-    # 2. Uklanjanje općenitih HTML tagova
+    # 3. Uklanjanje općenitih HTML/XML tagova
     tekst = re.sub(r'<[^>]+>', '', tekst)
     
-    # 3. Normalizacija prijeloma redaka na Unix standard
+    # 4. Normalizacija prijeloma redaka na Unix standard
     tekst = tekst.replace('\r\n', '\n').replace('\r', '\n')
     
-    # 4. Razbijanje na retke, micanje praznina s rubova i čišćenje uvodnog šuma
+    # 5. Razbijanje na retke i micanje praznina s rubova
     retci = [linija.strip() for linija in tekst.split('\n')]
     
-    # 5. Agresivno sažimanje i spajanje odlomaka
+    # 6. Agresivno sažimanje i spajanje odlomaka (povezivanje prekinutih rečenica)
     očišćeni_odlomci = []
     trenutni_odlomak = []
     
@@ -150,6 +209,7 @@ class TextCleaner:
                 "max_tokens": trans_cfg.get("max_tokens", 4000),
                 "repeat_penalty": trans_cfg.get("repeat_penalty", 1.20)
             },
+            "config_type": "Profil A: Knjizevna SF literatura",
             "chunking": {
                 "max_tokens_per_chunk": 1500,
                 "overlap_tokens": 100
