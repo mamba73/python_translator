@@ -59,15 +59,15 @@
       // Dinamički popuni opcije ako ih server šalje
       if (data.providers) {
         select.innerHTML = '';
-        data.providers.forEach(p => {
+        data.providers.forEach(model => {
           const opt = document.createElement('option');
-          opt.value = p.id;
-          opt.textContent = p.ime;
+          opt.value = `${model.provider}:${model.model}`;
+          opt.textContent = model.title;
           select.appendChild(opt);
         });
       }
 
-      select.value = data.active || 'lm_studio';
+      select.value = data.active || 'lmstudio:local';
     } catch (err) {
       // Ignoriraj — ostaje default iz HTML-a
     }
@@ -94,7 +94,7 @@
         showToast(data.poruka, 'warn');
       } else {
         if (warnEl) warnEl.classList.add('hidden');
-        showToast(`Provider: ${data.label}`, 'info');
+        showToast(`Provider: ${data.title}`, 'info');
       }
     } catch (e) {
       showToast('Greška pri promjeni providera: ' + e.message, 'error');

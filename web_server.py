@@ -378,25 +378,23 @@ async def api_profili():
 async def api_get_provider():
     """Vraća trenutno aktivni provider i listu dostupnih iz settings.yaml."""
     try:
-        import yaml
-        with open(CONFIG_DIR / "settings.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
+        from app.config_loader import load_global_config
+        cfg = load_global_config()
 
-        providers_cfg = cfg.get("api", {}).get("providers", {})
-        active = cfg.get("api", {}).get("provider", "lm_studio")
+        providers_list = cfg.get("api", {}).get("providers", [])
+        active_provider_name = cfg.get("api", {}).get("provider", "")
+        active_model_name = cfg.get("api", {}).get("model", "")
 
-        # Generiraj listu providera iz konfiguracije
-        provider_list = []
-        for key, p_info in providers_cfg.items():
-            label = p_info.get("label", key)
-            provider_list.append({"id": key, "ime": label})
-
-        active_label = providers_cfg.get(active, {}).get("label", active)
+        active_title = "Unknown"
+        for p_cfg in providers_list:
+            if p_cfg.get("provider") == active_provider_name and p_cfg.get("model") == active_model_name:
+                active_title = p_cfg.get("title", "Unknown")
+                break
 
         return JSONResponse({
-            "active": active,
-            "label": active_label,
-            "providers": provider_list
+            "active": f"{active_provider_name}:{active_model_name}",
+            "title": active_title,
+            "providers": providers_list
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -411,18 +409,28 @@ async def api_set_provider(req: ProviderRequest):
     """Mijenja aktivni provider u settings.yaml."""
     try:
         import yaml
-        with open(CONFIG_DIR / "settings.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
+        from app.config_loader import load_global_config, save_settings
+        config = load_global_config()
 
-        providers_cfg = cfg.get("api", {}).get("providers", {})
-        if req.provider not in providers_cfg:
-            raise HTTPException(status_code=400, detail=f"Nepoznati provider: {req.provider}")
+        # req.provider će biti u formatu "provider_type:model_name"
+        provider_type, model_name = req.provider.split(":", 1)
 
-        cfg.setdefault("api", {})["provider"] = req.provider
-        label = providers_cfg.get(req.provider, {}).get("label", req.provider)
+        providers_list = config.get("api", {}).get("providers", [])
+        selected_provider_cfg = None
+        for p_cfg in providers_list:
+            if p_cfg.get("provider") == provider_type and p_cfg.get("model") == model_name:
+                selected_provider_cfg = p_cfg
+                break
+
+        if not selected_provider_cfg:
+            raise HTTPException(status_code=400, detail=f"Nepoznati provider/model: {req.provider}")
+
+        config.setdefault("api", {})["provider"] = provider_type
+        config.setdefault("api", {})["model"] = model_name
+        title = selected_provider_cfg.get("title", req.provider)
 
         # Provjeri je li ključ dostupan za novi provider
-        key_env = providers_cfg.get(req.provider, {}).get("key_env")
+        key_env = selected_provider_cfg.get("key_env")
         key_ok = True
         key_poruka = ""
         if key_env:
@@ -430,21 +438,14 @@ async def api_set_provider(req: ProviderRequest):
             if not val:
                 key_ok = False
                 key_poruka = f"Upozorenje: {key_env} nije postavljen u .env!"
+        
+        save_settings(config)
 
-        # Spremi bez api_key vrijednosti (ako su slučajno tu)
-        for p in providers_cfg.values():
-            p.pop("api_key", None)
-
-        tmp = str(CONFIG_DIR / "settings.yaml") + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-        os.replace(tmp, str(CONFIG_DIR / "settings.yaml"))
-
-        logging.info(f"[PROVIDER] Promijenjen na: {req.provider} ({label})")
+        logging.info(f"[PROVIDER] Promijenjen na: {req.provider} ({title})")
         return JSONResponse({
             "status": "ok",
             "provider": req.provider,
-            "label": label,
+            "title": title,
             "key_ok": key_ok,
             "poruka": key_poruka
         })
@@ -524,21 +525,32 @@ async def api_prevedi(req: PrevodRequest):
 
         config = load_global_config()
 
-        # Provjeri API ključ za aktivni provider
-        active_provider = config.get("api", {}).get("provider", "lm_studio")
-        provider_cfg = config.get("api", {}).get("providers", {}).get(active_provider, {})
-        key_env = provider_cfg.get("key_env")
-        if key_env:
-            api_key = os.getenv(key_env, "")
-            if not api_key:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"API ključ nije pronađen! Provider '{active_provider}' zahtijeva "
-                        f"varijablu '{key_env}' u .env datoteci. "
-                        f"Otvori .env i dodaj: {key_env}=tvoj_kljuc"
+        # Provjeri API ključ za aktivni provider/model
+        active_provider_name = config.get("api", {}).get("provider", "")
+        active_model_name = config.get("api", {}).get("model", "")
+
+        active_provider_cfg = None
+        for p_cfg in config.get("api", {}).get("providers", []):
+            if p_cfg.get("provider") == active_provider_name and p_cfg.get("model") == active_model_name:
+                active_provider_cfg = p_cfg
+                break
+        
+        if active_provider_cfg:
+            key_env = active_provider_cfg.get("key_env")
+            if key_env:
+                api_key = os.getenv(key_env, "")
+                if not api_key:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"API ključ nije pronađen! Provider "
+                            f"\'{active_provider_cfg.get("title", "Unknown")}\' zahtijeva "
+                            f"varijablu "
+                            f"\'{key_env}\' u .env datoteci. "
+                            f"Otvori .env i dodaj: {key_env}=tvoj_kljuc"
+                        )
                     )
-                )
+
 
         fm = FileManager(config)
         cp = CheckpointManager(config, fm)

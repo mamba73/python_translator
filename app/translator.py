@@ -43,12 +43,23 @@ class Translator:
         self._cp = checkpoint_manager
         self._api_cfg = config.get("api", {})
         self._trans_cfg = config.get("translation", {})
-        self._provider = self._api_cfg.get("provider", "lm_studio")
+        self._provider_name = self._api_cfg.get("provider", "lmstudio") # Koristimo provider_name i model_name
+        self._model_name = self._api_cfg.get("model", "local") # za dohvat provider_cfg iz liste
         self._timeout = self._api_cfg.get("timeout", 120)
         self._book_system_prompt: str | None = None  # Per-book system prompt iz config.yaml
         self._memorija_file: str | None = None       # Ime memorija datoteke iz config.yaml
         self._book_dir: str | None = None            # Direktorij knjige
         self._book_memorija_id: str | None = None    # ID za prepoznavanje promjene knjige
+
+        self._current_provider_cfg: dict[str, Any] = self._dohvati_provider_konfiguraciju() # Dohvati cijelu config za aktivni provider
+
+    def _dohvati_provider_konfiguraciju(self) -> dict[str, Any]:
+        """Dohvaća kompletnu konfiguraciju za aktivni provider i model iz liste."""
+        providers_list = self._api_cfg.get("providers", [])
+        for p_cfg in providers_list:
+            if p_cfg.get("provider") == self._provider_name and p_cfg.get("model") == self._model_name:
+                return p_cfg
+        return {} # Vraca prazan rječnik ako nije pronađen
 
     # -----------------------------------------------------------------------
     # Per-book memorija ([ime_knjige]_memorija.json)
@@ -382,9 +393,12 @@ class Translator:
     def _api_call(self, messages: list[dict[str, str]]) -> str:
         """Privatna metoda za API poziv - delegira na odgovarajući adapter."""
 
-        adapter = getattr(self, f"_call_{self._provider}", None)
+        # Dinamički kreiraj ime adapter metode (npr. _call_lmstudio)
+        adapter_name = f"_call_{self._provider_name}"
+        adapter = getattr(self, adapter_name, None)
+
         if adapter is None:
-            raise ValueError(f"Nepodržani provider: {self._provider}")
+            raise ValueError(f"Nepodržani provider: {self._provider_name}")
 
         return adapter(messages)
 
@@ -419,23 +433,12 @@ class Translator:
 
         return self._http_request(f"{base_url}/chat/completions", payload)
 
-    def _call_ollama_local(self, messages: list[dict[str, str]]) -> str:
-        """Adapter za lokalni Ollama."""
-        provider_cfg = self._api_cfg.get("providers", {}).get("ollama_local", {})
-        base_url = provider_cfg.get("base_url", "http://127.0.0.1:11434/api")
-        model = provider_cfg.get("model", "llama3.2")
-
-        payload = self._build_payload(messages)
-        payload["model"] = model
-
-        return self._http_request(f"{base_url}/chat", payload)
-
-    def _call_ollama_cloud(self, messages: list[dict[str, str]]) -> str:
-        """Adapter za Ollama cloud."""
-        provider_cfg = self._api_cfg.get("providers", {}).get("ollama_cloud", {})
-        base_url = provider_cfg.get("base_url", "https://api.ollama.ai/v1")
-        model = provider_cfg.get("model", "llama3.2")
-        api_key = provider_cfg.get("api_key", "")
+    def _call_ollama(self, messages: list[dict[str, str]]) -> str:
+        """Adapter za Ollama (lokalni ili cloud)."""
+        # Koristimo _current_provider_cfg koji je vec dohvacen u __init__
+        base_url = self._current_provider_cfg.get("apiBase", "http://127.0.0.1:11434")
+        model = self._current_provider_cfg.get("model", "llama3.2")
+        api_key = self._current_provider_cfg.get("api_key", "")
 
         payload = self._build_payload(messages)
         payload["model"] = model
@@ -444,14 +447,27 @@ class Translator:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        return self._http_request(f"{base_url}/chat/completions", payload, headers)
+        # Ollama API ima /api/chat endpoint za chat completions (ne /v1/chat/completions)
+        return self._http_request(f"{base_url}/api/chat", payload, headers)
+
+    def _call_lmstudio(self, messages: list[dict[str, str]]) -> str:
+        """Adapter za LM Studio (OpenAI-compatible)."""
+        # Koristimo _current_provider_cfg koji je vec dohvacen u __init__
+        base_url = self._current_provider_cfg.get("apiBase", "http://127.0.0.1:1234")
+        model = self._current_provider_cfg.get("model", "")
+
+        payload = self._build_payload(messages)
+        if model:
+            payload["model"] = model
+
+        return self._http_request(f"{base_url}/v1/chat/completions", payload)
 
     def _call_openai(self, messages: list[dict[str, str]]) -> str:
-        """Adapter za OpenAI."""
-        provider_cfg = self._api_cfg.get("providers", {}).get("openai", {})
-        base_url = provider_cfg.get("base_url", "https://api.openai.com/v1")
-        model = provider_cfg.get("model", "gpt-4o")
-        api_key = provider_cfg.get("api_key", "")
+        """Adapter za OpenAI (ili Qwen putem OpenAI kompatibilnog API-ja)."""
+        # Koristimo _current_provider_cfg koji je vec dohvacen u __init__
+        base_url = self._current_provider_cfg.get("apiBase", "https://api.openai.com/v1")
+        model = self._current_provider_cfg.get("model", "gpt-4o")
+        api_key = self._current_provider_cfg.get("api_key", "")
 
         payload = self._build_payload(messages)
         payload["model"] = model
@@ -464,10 +480,10 @@ class Translator:
 
     def _call_gemini(self, messages: list[dict[str, str]]) -> str:
         """Adapter za Google Gemini."""
-        provider_cfg = self._api_cfg.get("providers", {}).get("gemini", {})
-        base_url = provider_cfg.get("base_url", "https://generativelanguage.googleapis.com/v1beta")
-        model = provider_cfg.get("model", "gemini-2.0-flash")
-        api_key = provider_cfg.get("api_key", "")
+        # Koristimo _current_provider_cfg koji je vec dohvacen u __init__
+        base_url = self._current_provider_cfg.get("apiBase", "https://generativelanguage.googleapis.com/v1beta")
+        model = self._current_provider_cfg.get("model", "gemini-2.0-flash")
+        api_key = self._current_provider_cfg.get("api_key", "")
 
         # Gemini koristi specifičan contents format
         # Injektiramo system instruction i user upite na pravilan način za Gemini
@@ -519,47 +535,16 @@ class Translator:
                 user_msg = msg.get("content", "")
                 break
         log_llm_response(user_msg, result, {
-            "provider": self._provider,
+            "provider": self._provider_name,
             "url": url,
-            "model": payload.get("model", ""),
+            "model": model,
         })
         return result
 
-    def _call_qwen(self, messages: list[dict[str, str]]) -> str:
-        """Adapter za Qwen (Alibaba)."""
-        provider_cfg = self._api_cfg.get("providers", {}).get("qwen", {})
-        base_url = provider_cfg.get("base_url", "https://dashscope.aliyuncs.com/api/v1")
-        model = provider_cfg.get("model", "qwen-turbo")
-        api_key = provider_cfg.get("api_key", "")
+    # Uklonjen _call_ollama_local i _call_ollama_cloud jer ih zamjenjuje _call_ollama
+    # Uklonjen _call_qwen jer ga pokriva _call_openai (koristi isti API)
+    # Uklonjen _call_custom jer nije dio nove arhitekture
 
-        payload = self._build_payload(messages)
-        payload["model"] = model
-
-        headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
-        return self._http_request(f"{base_url}/chat/completions", payload, headers)
-
-    def _call_custom(self, messages: list[dict[str, str]]) -> str:
-        """Adapter za custom provider."""
-        provider_cfg = self._api_cfg.get("providers", {}).get("custom", {})
-        base_url = provider_cfg.get("base_url", "")
-        model = provider_cfg.get("model", "")
-        api_key = provider_cfg.get("api_key", "")
-
-        if not base_url:
-            raise ValueError("Custom provider base_url nije definiran")
-
-        payload = self._build_payload(messages)
-        if model:
-            payload["model"] = model
-
-        headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
-        return self._http_request(base_url, payload, headers)
 
     # -----------------------------------------------------------------------
     # HTTP request helper
@@ -606,7 +591,7 @@ class Translator:
                                 user_msg = m.get("content", "")
                                 break
                         log_llm_response(user_msg, result, {
-                            "provider": self._provider,
+                            "provider": self._provider_name,
                             "url": url,
                             "model": payload.get("model", ""),
                         })
@@ -689,7 +674,7 @@ class Translator:
             f"Vrijeme: {timestamp}",
             f"Granularnost: {granularnost}",
             f"Količina: {kolicina} segmenata",
-            f"Provider: {self._provider}",
+            f"Provider: {self._provider_name}",
             f"Model: {model_name}",
         ]
 
@@ -758,20 +743,17 @@ class Translator:
 
     def detektiraj_aktivni_model(self) -> str:
         """Detektira aktivni model (ako je auto_detect_model uključen)."""
-        if not self._api_cfg.get("auto_detect_model", True):
-            provider_cfg = self._api_cfg.get("providers", {}).get(self._provider, {})
-            return provider_cfg.get("model", "")
-
         # Auto-detect logika - zavisi od providera
         try:
-            if self._provider == "lm_studio":
+            if self._provider_name == "lmstudio":
                 return self._detect_lm_studio_model()
-            elif self._provider == "ollama_local":
+            elif self._provider_name == "ollama":
                 return self._detect_ollama_model()
         except Exception as e:
-            logging.warning(f"Auto-detect nije uspio: {e}")
+            logging.warning(f"Auto-detect modela nije uspio: {e}")
 
-        return ""
+        # Ako auto-detekcija nije aktivna ili ne uspije, vrati model iz konfiguracije
+        return self._model_name if self._model_name else ""
 
     # -----------------------------------------------------------------------
     # Auto-detekcija modela (P3 - popravak regresije)
@@ -785,8 +767,7 @@ class Translator:
         Returns:
             Naziv modela ili prazan string.
         """
-        provider_cfg = self._api_cfg.get("providers", {}).get("lm_studio", {})
-        base_url = provider_cfg.get("base_url", "http://127.0.0.1:1234/v1")
+        base_url = self._current_provider_cfg.get("apiBase", "http://127.0.0.1:1234")
         models_url = f"{base_url}/models"
         detect_timeout = self._api_cfg.get("auto_detect_timeout", 5)
 
@@ -808,8 +789,7 @@ class Translator:
         Returns:
             Naziv modela ili prazan string.
         """
-        provider_cfg = self._api_cfg.get("providers", {}).get("ollama_local", {})
-        base_url = provider_cfg.get("base_url", "http://127.0.0.1:11434/api")
+        base_url = self._current_provider_cfg.get("apiBase", "http://127.0.0.1:11434")
         tags_url = f"{base_url}/tags"
         detect_timeout = self._api_cfg.get("auto_detect_timeout", 5)
 
@@ -836,7 +816,7 @@ class Translator:
         """
         detalji: dict[str, Any] = {
             "model": "",
-            "provider": self._provider,
+            "provider": self._provider_name,
             "parametri": "",
             "quantization": "",
             "size": "",
@@ -846,10 +826,9 @@ class Translator:
         detect_timeout = self._api_cfg.get("auto_detect_timeout", 5)
 
         try:
-            if self._provider == "lm_studio":
-                provider_cfg = self._api_cfg.get("providers", {}).get("lm_studio", {})
-                base_url = provider_cfg.get("base_url", "http://127.0.0.1:1234/v1")
-                models_url = f"{base_url}/models"
+            if self._provider_name == "lmstudio":
+                base_url = self._current_provider_cfg.get("apiBase", "http://127.0.0.1:1234")
+                models_url = f"{base_url}/v1/models"
                 request = urllib.request.Request(models_url, method="GET")
                 with urllib.request.urlopen(request, timeout=detect_timeout) as response:
                     data = json.loads(response.read().decode('utf-8'))
@@ -857,26 +836,25 @@ class Translator:
                         model_info = data["data"][0]
                         detalji["model"] = model_info.get("id", "")
                         detalji["raw"] = model_info
-                        # LM Studio može vratiti dodatne metapodatke
                         detalji["context_length"] = model_info.get("context_length", "")
                         detalji["owned_by"] = model_info.get("owned_by", "")
-            elif self._provider == "ollama_local":
-                provider_cfg = self._api_cfg.get("providers", {}).get("ollama_local", {})
-                base_url = provider_cfg.get("base_url", "http://127.0.0.1:11434/api")
-                tags_url = f"{base_url}/tags"
+            elif self._provider_name == "ollama":
+                base_url = self._current_provider_cfg.get("apiBase", "http://127.0.0.1:11434")
+                tags_url = f"{base_url}/api/tags"
                 request = urllib.request.Request(tags_url, method="GET")
                 with urllib.request.urlopen(request, timeout=detect_timeout) as response:
                     data = json.loads(response.read().decode('utf-8'))
                     if data.get("models") and len(data["models"]) > 0:
-                        model_info = data["models"][0]
-                        detalji["model"] = model_info.get("name", "")
-                        detalji["raw"] = model_info
-                        # Ollama details sekcija
-                        details = model_info.get("details", {})
-                        detalji["parametri"] = details.get("parameter_size", "")
-                        detalji["quantization"] = details.get("quantization_level", "")
-                        detalji["size"] = model_info.get("size", "")
-                        detalji["context_length"] = details.get("context_length", "")
+                        # Tražimo detalje za aktivni model, ne prvi s liste
+                        model_info = next((m for m in data["models"] if m.get("name") == self._model_name), None)
+                        if model_info:
+                            detalji["model"] = model_info.get("name", "")
+                            detalji["raw"] = model_info
+                            details = model_info.get("details", {})
+                            detalji["parametri"] = details.get("parameter_size", "")
+                            detalji["quantization"] = details.get("quantization_level", "")
+                            detalji["size"] = model_info.get("size", "")
+                            detalji["context_length"] = details.get("context_length", "")
         except Exception as e:
             logging.warning(f"Dohvat detalja modela nije uspio: {e}")
 

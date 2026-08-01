@@ -1,0 +1,32 @@
+models:
+  - title: "LM Studio (Lokalno)"
+    provider: "lmstudio"
+    model: "local"
+    apiBase: "http://127.0.0"
+
+  - title: "Ollama Lokalno"
+    provider: "ollama"
+    model: "llama3.2"
+    apiBase: "http://127.0.0.1:11434"
+
+  - title: "Ollama Cloud"
+    provider: "ollama"
+    model: "llama3.2"
+    apiBase: "https://ollama.ai"
+    key_env: "OLLAMA_API_KEY"
+
+  - title: "OpenAI (GPT-4o)"
+    provider: "openai"
+    model: "gpt-4o"
+    key_env: "OPENAI_API_KEY"
+
+  - title: "Gemini (2.0 Flash)"
+    provider: "gemini"
+    model: "gemini-2.0-flash"
+    key_env: "GEMINI_API_KEY"
+
+  - title: "Qwen (DashScope)"
+    provider: "openai"
+    model: "qwen-turbo"
+    apiBase: "https://aliyuncs.com"
+    key_env: "QWEN_API_KEY"

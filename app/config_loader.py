@@ -24,6 +24,7 @@ except ImportError:
 _ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_DIR = _ROOT / "config"
 _SETTINGS_FILE = _CONFIG_DIR / "settings.yaml"
+_PROVIDERS_FILE = _CONFIG_DIR / "providers.yaml"
 _CHAR_MAP = str.maketrans("čćšđžŽŠĐČĆ", "ccsdzZSDCC")
 
 
@@ -59,6 +60,10 @@ def load_global_config() -> dict[str, Any]:
 
     with open(_SETTINGS_FILE, "r", encoding="utf-8") as f:
         cfg: dict[str, Any] = yaml.safe_load(f)
+
+    if _PROVIDERS_FILE.exists():
+        with open(_PROVIDERS_FILE, "r", encoding="utf-8") as pf:
+            cfg.setdefault("api", {})["providers"] = yaml.safe_load(pf).get("models", [])
 
     # Ubaci CHAR_MAP koji se ne može pohraniti u YAML
     cfg.setdefault("_internal", {})["char_map"] = _CHAR_MAP
@@ -136,8 +141,11 @@ def save_settings(cfg: dict[str, Any]) -> None:
 
     # SIGURNOST: Ukloni sve api_key vrijednosti iz providera — nikad ne smiju
     # biti zapisani u YAML. Samo key_env reference ostaju.
+    if "api" in clean and "providers" in clean["api"]:
+        clean["api"].pop("providers", None)
+
     providers = clean.get("api", {}).get("providers", {})
-    for provider_cfg in providers.values():
+    for provider_cfg in providers.values(): # Ova petlja se više ne koristi jer su provideri u drugoj datoteci
         provider_cfg.pop("api_key", None)
 
     # Vrati relativne putanje direktorija radi čistoće u settings.yaml
@@ -257,10 +265,11 @@ def _inject_api_keys(cfg: dict[str, Any]) -> dict[str, Any]:
     Raises:
         ValueError: ako aktivni provider nema postavljenu varijablu u .env.
     """
-    providers = cfg.get("api", {}).get("providers", {})
-    active_provider = cfg.get("api", {}).get("provider", "")
+    providers = cfg.get("api", {}).get("providers", [])
+    active_provider_name = cfg.get("api", {}).get("provider", "")
+    active_model_name = cfg.get("api", {}).get("model", "")
 
-    for provider_name, provider_cfg in providers.items():
+    for provider_cfg in providers:
         key_env = provider_cfg.get("key_env")
         if not key_env:
             continue
@@ -268,11 +277,15 @@ def _inject_api_keys(cfg: dict[str, Any]) -> dict[str, Any]:
         value = os.getenv(key_env, "")
         provider_cfg["api_key"] = value
 
-        # Upozori samo za aktivni provider koji zahtijeva ključ (ne baci grešku — server mora raditi)
-        if provider_name == active_provider and not value:
+        # Upozori samo za aktivni provider/model koji zahtijeva ključ (ne baci grešku — server mora raditi)
+        is_active_provider_model = (
+            provider_cfg.get("provider") == active_provider_name
+            and provider_cfg.get("model") == active_model_name
+        )
+        if is_active_provider_model and not value:
             logging.warning(
                 f"Upozorenje: Varijabla [{key_env}] nije postavljena u .env datoteci! "
-                f"Provider '{provider_name}' zahtijeva API ključ."
+                f"Provider \'{provider_cfg.get("title", "")}\' zahtijeva API ključ."
             )
 
     return cfg
