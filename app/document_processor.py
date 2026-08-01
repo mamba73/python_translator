@@ -133,15 +133,7 @@ class DocumentProcessor:
         else:
             raise ValueError(f"Nepodržani format datoteke: {ekstenzija}")
 
-    def analiziraj_i_izvuci_tekst(self, putanja_knjige: str) -> tuple[str, dict[str, list[str]], list]:
-        """Provodi frekvencijsku analizu otiska te čisti Header/Footer bez hardkodiranja.
-
-        Args:
-            putanja_knjige: Apsolutna putanja do datoteke za obradu.
-
-        Returns:
-            tuple: (očišćeni_tekst, detektirani_elementi, pages)
-        """
+        def analiziraj_i_izvuci_tekst(self, putanja_knjige: str) -> tuple[str, dict[str, list[str]], list]: """Provodi frekvencijsku analizu otiska te čisti Header/Footer bez hardkodiranja."""
         ekstenzija = os.path.splitext(putanja_knjige)[1].lower()
 
         logging.info(f"Započinje analiza dokumenta: {os.path.basename(putanja_knjige)}")
@@ -173,14 +165,31 @@ class DocumentProcessor:
         vrhovi_stranica: list[str] = []
         dna_stranica: list[str] = []
 
+        # --- 1. PROLAZ: SKENIRANJE GRANICA STRANICA ZA FREKVENCIJSKU ANALIZU ---
         for i in range(limit_skeniranja):
-            tekst_stranice = reader.pages[i].extract_text()
-            if not tekst_stranice:
+            sirovi_tekst = reader.pages[i].extract_text()
+            if not sirovi_tekst:
                 continue
 
-            # Prije frekvencijske analize očisti unikatni dinamički šum
-            tekst_stranice = ocisti_lokalni_i_dinamicki_pdf_sum(tekst_stranice)
+            # Krpamo prijelome redaka unutar same stranice
+            linije = sirovi_tekst.split('\n')
+            spojene_linije = []
+            za_spajanje = []
+            for l in linije:
+                l_clean = l.strip()
+                if not l_clean:
+                    if za_spajanje:
+                        spojene_linije.append(" ".join(za_spajanje))
+                        za_spajanje = []
+                else:
+                    za_spajanje.append(l_clean)
+                    if l_clean.endswith(('.', '?', '!', '"', '”', '’')):
+                        spojene_linije.append(" ".join(za_spajanje))
+                        za_spajanje = []
+            if za_spajanje:
+                spojene_linije.append(" ".join(za_spajanje))
 
+            tekst_stranice = ocisti_lokalni_i_dinamicki_pdf_sum("\n".join(spojene_linije))
             redovi = [r.strip() for r in tekst_stranice.split('\n') if r.strip()]
             if redovi:
                 vrhovi_stranica.append(redovi[0])
@@ -205,16 +214,37 @@ class DocumentProcessor:
                     za_uklanjanje.append(tekst)
                     detektirani_elementi["footers"].append(tekst)
 
+        # --- 2. PROLAZ: STVARNA EKSTRAKCIJA I KONAČNO ČIŠĆENJE TEKSTA KNJIGE ---
         ocisceni_tekst_lista: list[str] = []
         regex_brojevi = r'^\d+$|^\b(Page|page)\b\s*\d+'
 
         for i in range(ukupno_stranica):
-            tekst_stranice = reader.pages[i].extract_text()
-            if not tekst_stranice:
+            sirovi_tekst = reader.pages[i].extract_text()
+            if not sirovi_tekst:
                 continue
 
-            # Presretanje i brisanje dinamičkih i file:// oznaka na razini stranice
-            tekst_stranice = ocisti_lokalni_i_dinamicki_pdf_sum(tekst_stranice)
+            # PAMETNO SPAJANJE LOMOVA UNUTAR KONAČNOG IZVOZA STRANICA
+            linije = sirovi_tekst.split('\n')
+            spojene_linije = []
+            za_spajanje = []
+
+            for l in linije:
+                l_clean = l.strip()
+                if not l_clean:
+                    if za_spajanje:
+                        spojene_linije.append(" ".join(za_spajanje))
+                        za_spajanje = []
+                    spojene_linije.append("")
+                else:
+                    za_spajanje.append(l_clean)
+                    if l_clean.endswith(('.', '?', '!', '"', '”', '’')):
+                        spojene_linije.append(" ".join(za_spajanje))
+                        za_spajanje = []
+
+            if za_spajanje:
+                spojene_linije.append(" ".join(za_spajanje))
+
+            tekst_stranice = ocisti_lokalni_i_dinamicki_pdf_sum("\n".join(spojene_linije))
 
             redovi = tekst_stranice.split('\n')
             novi_redovi: list[str] = []
@@ -230,6 +260,7 @@ class DocumentProcessor:
 
         kompletan_tekst = "\n".join(ocisceni_tekst_lista)
         return kompletan_tekst, detektirani_elementi, reader.pages
+
 
     def segmentiraj_poglavlja(self, tekst: str) -> list[dict[str, str]]:
         """Razbija očišćeni tekst na poglavlja koristeći konfiguracijske uzorke.

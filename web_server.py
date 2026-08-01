@@ -374,30 +374,29 @@ async def api_profili():
     return JSONResponse({"profili": profili})
 
 
-# Mapa: provider ključ → ime za prikaz
-_PROVIDER_LABELS = {
-    "lm_studio":    "LM Studio (Lokalno)",
-    "ollama_local": "Ollama Lokalno",
-    "ollama_cloud": "Ollama Cloud",
-    "openai":       "OpenAI (GPT-4o)",
-    "gemini":       "Gemini (2.0 Flash)",
-    "qwen":         "Qwen (DashScope)",
-}
-
-
 @app.get("/api/provider")
 async def api_get_provider():
-    """Vraća trenutno aktivni provider iz settings.yaml."""
+    """Vraća trenutno aktivni provider i listu dostupnih iz settings.yaml."""
     try:
         import yaml
         with open(CONFIG_DIR / "settings.yaml", "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
+
+        providers_cfg = cfg.get("api", {}).get("providers", {})
         active = cfg.get("api", {}).get("provider", "lm_studio")
-        providers = list(_PROVIDER_LABELS.keys())
+
+        # Generiraj listu providera iz konfiguracije
+        provider_list = []
+        for key, p_info in providers_cfg.items():
+            label = p_info.get("label", key)
+            provider_list.append({"id": key, "ime": label})
+
+        active_label = providers_cfg.get(active, {}).get("label", active)
+
         return JSONResponse({
             "active": active,
-            "label": _PROVIDER_LABELS.get(active, active),
-            "providers": [{"id": k, "ime": v} for k, v in _PROVIDER_LABELS.items()]
+            "label": active_label,
+            "providers": provider_list
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -409,18 +408,21 @@ class ProviderRequest(BaseModel):
 
 @app.post("/api/provider")
 async def api_set_provider(req: ProviderRequest):
-    """Mijenja aktivni provider u settings.yaml i .env provjeri."""
-    if req.provider not in _PROVIDER_LABELS:
-        raise HTTPException(status_code=400, detail=f"Nepoznati provider: {req.provider}")
+    """Mijenja aktivni provider u settings.yaml."""
     try:
         import yaml
         with open(CONFIG_DIR / "settings.yaml", "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
+        providers_cfg = cfg.get("api", {}).get("providers", {})
+        if req.provider not in providers_cfg:
+            raise HTTPException(status_code=400, detail=f"Nepoznati provider: {req.provider}")
+
         cfg.setdefault("api", {})["provider"] = req.provider
+        label = providers_cfg.get(req.provider, {}).get("label", req.provider)
 
         # Provjeri je li ključ dostupan za novi provider
-        key_env = cfg.get("api", {}).get("providers", {}).get(req.provider, {}).get("key_env")
+        key_env = providers_cfg.get(req.provider, {}).get("key_env")
         key_ok = True
         key_poruka = ""
         if key_env:
@@ -429,9 +431,8 @@ async def api_set_provider(req: ProviderRequest):
                 key_ok = False
                 key_poruka = f"Upozorenje: {key_env} nije postavljen u .env!"
 
-        # Spremi bez api_key vrijednosti
-        providers = cfg.get("api", {}).get("providers", {})
-        for p in providers.values():
+        # Spremi bez api_key vrijednosti (ako su slučajno tu)
+        for p in providers_cfg.values():
             p.pop("api_key", None)
 
         tmp = str(CONFIG_DIR / "settings.yaml") + ".tmp"
@@ -439,11 +440,11 @@ async def api_set_provider(req: ProviderRequest):
             yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
         os.replace(tmp, str(CONFIG_DIR / "settings.yaml"))
 
-        logging.info(f"[PROVIDER] Promijenjen na: {req.provider} ({_PROVIDER_LABELS[req.provider]})")
+        logging.info(f"[PROVIDER] Promijenjen na: {req.provider} ({label})")
         return JSONResponse({
             "status": "ok",
             "provider": req.provider,
-            "label": _PROVIDER_LABELS[req.provider],
+            "label": label,
             "key_ok": key_ok,
             "poruka": key_poruka
         })

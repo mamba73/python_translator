@@ -164,7 +164,6 @@ def save_settings(cfg: dict[str, Any]) -> None:
     os.replace(tmp, _SETTINGS_FILE)
     logging.debug("config/settings.yaml ažuriran (api_key polja nisu zapisana).")
 
-
 def create_book_config(book_dir: Path | str,
                        book_title: str,
                        author: str,
@@ -173,20 +172,10 @@ def create_book_config(book_dir: Path | str,
                        api_provider: str | None = None) -> dict[str, Any]:
     """Generira i sprema work/output/<Knjiga>/config.yaml iz profil predloška.
 
-    Poziva se pri prvoj obradi knjige ako config.yaml ne postoji.
-
-    Args:
-        book_dir:      Putanja do direktorija knjige (work/output/<K>/).
-        book_title:    Naslov knjige.
-        author:        Autor knjige.
-        original_file: Naziv izvorne datoteke.
-        profile_name:  Profil predložak koji se koristi.
-        api_provider:  Override API providera (None = koristi globalni).
-
-    Returns:
-        Generirani book config rječnik.
+    Automatski kreira i pripadajući memorija.json s predefiniranim pravilima.
     """
     from datetime import datetime
+    import json
 
     profile = load_profile(profile_name)
     now = datetime.now().isoformat(timespec="seconds")
@@ -209,19 +198,8 @@ def create_book_config(book_dir: Path | str,
 
     book_dir = Path(book_dir)
     book_dir.mkdir(parents=True, exist_ok=True)
-    config_path = book_dir / "config.yaml"
-
-    with open(config_path, "w", encoding="utf-8") as f:
-        yaml.dump(
-            book_cfg, 
-            f, 
-            Dumper=yaml.SafeDumper,  # Čisti i sigurni višelinični upis za knjige
-            allow_unicode=True, 
-            default_flow_style=False,
-            sort_keys=False
-        )
-
-
+    
+    # 1. Prvo kreiramo i upisujemo MEMORIJA.JSON (Glosar s pravilima) da osiguramo podatke
     memorija_path = book_dir / book_cfg["memorija_file"]
     if not memorija_path.exists():
         predefinirana_memorija = {
@@ -240,10 +218,22 @@ def create_book_config(book_dir: Path | str,
         with open(memorija_path, "w", encoding="utf-8") as json_f:
             json.dump(predefinirana_memorija, json_f, indent=2, ensure_ascii=False)
         logging.info(f"Kreiran glosar s predefiniranim pravilima: {memorija_path}")
-         
+
+    # 2. Zapisujemo čisti, višelinični config.yaml pomoću stabilnog SafeDumpera s našim registriranim filterom
+    config_path = book_dir / "config.yaml"
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(
+            book_cfg, 
+            f, 
+            Dumper=yaml.SafeDumper,  # Neprobojan i ugrađen dumper
+            allow_unicode=True, 
+            default_flow_style=False,
+            sort_keys=False
+        )
 
     logging.info(f"Kreiran book config: {config_path}")
     return book_cfg
+
 
 
 # ---------------------------------------------------------------------------

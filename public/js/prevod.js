@@ -55,6 +55,18 @@
     try {
       const res = await fetch('/api/provider');
       const data = await res.json();
+
+      // Dinamički popuni opcije ako ih server šalje
+      if (data.providers) {
+        select.innerHTML = '';
+        data.providers.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = p.ime;
+          select.appendChild(opt);
+        });
+      }
+
       select.value = data.active || 'lm_studio';
     } catch (err) {
       // Ignoriraj — ostaje default iz HTML-a

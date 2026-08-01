@@ -71,43 +71,90 @@ def ukloni_sistemski_i_paginacijski_sum(tekst: str) -> str:
 
 
 def ocisti_html_i_paragrafe(sirovi_tekst: str) -> str:
-    """Čisti HTML entitete, tagove, tehnički šum stranica i normalizira višestruke prazne redove."""
+    """
+    Čisti HTML entitete, tagove, tehnički šum stranica i normalizira višestruke prazne redove.
+    Također pametno spaja rečenice prelomljene u stupce, ali čuva naslove poglavlja.
+    """
     if not sirovi_tekst:
         return ""
     
     # 1. Prvo pokrećemo napredno čišćenje sistemskog šuma, file linkova i brojeva stranica
     tekst = ukloni_sistemski_i_paginacijski_sum(sirovi_tekst)
     
-    # 2. Čišćenje specifičnih HTML entiteta i skrivenih razmaka
+    # 2. Čišćenje HTML tagova kroz više redova (Multiline regex)
+    tekst = re.sub(r'<[^>]+>', '', tekst, flags=re.DOTALL)
+    
+    # 3. Čišćenje specifičnih HTML entiteta i skrivenih razmaka
     tekst = tekst.replace('\xa0', ' ')
     tekst = tekst.replace(' ', ' ')
-    tekst = re.sub(r'<br\s*/?>', '\n', tekst)
-    
-    # 3. Uklanjanje općenitih HTML/XML tagova
-    tekst = re.sub(r'<[^>]+>', '', tekst)
+    tekst = re.sub(r'<br\s*/?>', '\n', tekst, flags=re.IGNORECASE)
     
     # 4. Normalizacija prijeloma redaka na Unix standard
     tekst = tekst.replace('\r\n', '\n').replace('\r', '\n')
     
-    # 5. Razbijanje na retke i micanje praznina s rubova
+    # 5. Razbijanje teksta na retke i micanje praznina s rubova
     retci = [linija.strip() for linija in tekst.split('\n')]
     
-    # 6. Agresivno sažimanje i spajanje odlomaka (povezivanje prekinutih rečenica)
     očišćeni_odlomci = []
     trenutni_odlomak = []
     
     for linija in retci:
         if linija == "":
+            # Ako imamo prazan red, ali rečenica u memoriji NE završava točkom,
+            # to znači da je u pitanju umjetni PDF/HTML lom. Nastavi spajati.
+            if trenutni_odlomak and not trenutni_odlomak[-1].endswith(('.', '?', '!', '"', '”', '-')):
+                continue
+            
+            # Ako je rečenica stvarno gotova, zatvori odlomak
             if trenutni_odlomak:
-                očišćeni_odlomci.append(" ".join(trenutni_odlomak))
+                pun_odlomak = " ".join(trenutni_odlomak)
+                pun_odlomak = re.sub(r'\s+', ' ', pun_odlomak).strip()
+                pun_odlomak = re.sub(r'\s+([,.:;?!])', r'\1', pun_odlomak)
+                očišćeni_odlomci.append(pun_odlomak)
                 trenutni_odlomak = []
         else:
-            trenutni_odlomak.append(linija)
+            # --- ZAŠTITA NASLOVA I SADRŽAJA KNJIGE ---
+            # Ako redak prepoznamo kao naslov poglavlja ili je napisan isključivo VELIKIM SLOVIMA,
+            # prisilno zatvaramo stari odlomak i otvaramo novi, kako ih ne bismo spojili u jednu liniju.
+            je_naslov = linija.startswith(('Part', 'Chapter', 'Contents', 'Introduction', 'THE STORY')) or linija.isupper()
             
+            if je_naslov:
+                if trenutni_odlomak:
+                    pun_odlomak = " ".join(trenutni_odlomak)
+                    pun_odlomak = re.sub(r'\s+', ' ', pun_odlomak).strip()
+                    pun_odlomak = re.sub(r'\s+([,.:;?!])', r'\1', pun_odlomak)
+                    očišćeni_odlomci.append(pun_odlomak)
+                trenutni_odlomak = [linija]
+                continue
+
+            # --- DETEKCIJA I SPAJANJE SLOMLJENIH REČENICA ---
+            # Ako linija počinje malim slovom ili interpunkcijom, to je sigurno nastavak rečenice
+            if trenutni_odlomak and (linija.islower() or linija.startswith((',', '.', ':', ';', '?', '!'))):
+                if linija.startswith((',', '.', ':', ';', '?', '!')):
+                    trenutni_odlomak[-1] = trenutni_odlomak[-1] + linija
+                else:
+                    trenutni_odlomak.append(linija)
+            else:
+                # Ako stari odlomak nije završio točkom, spoji bez obzira na veliko slovo (za imena poput Columbia)
+                if trenutni_odlomak and not trenutni_odlomak[-1].endswith(('.', '?', '!', '"', '”', '-')):
+                    trenutni_odlomak.append(linija)
+                else:
+                    # Počinje stvarni, novi odlomak teksta
+                    if trenutni_odlomak:
+                        pun_odlomak = " ".join(trenutni_odlomak)
+                        pun_odlomak = re.sub(r'\s+', ' ', pun_odlomak).strip()
+                        pun_odlomak = re.sub(r'\s+([,.:;?!])', r'\1', pun_odlomak)
+                        očišćeni_odlomci.append(pun_odlomak)
+                    trenutni_odlomak = [linija]
+            
+    # Zatvaranje zadnjeg odlomka nakon izlaska iz petlje
     if trenutni_odlomak:
-        očišćeni_odlomci.append(" ".join(trenutni_odlomak))
+        pun_odlomak = " ".join(trenutni_odlomak)
+        pun_odlomak = re.sub(r'\s+', ' ', pun_odlomak).strip()
+        pun_odlomak = re.sub(r'\s+([,.:;?!])', r'\1', pun_odlomak)
+        očišćeni_odlomci.append(pun_odlomak)
         
-    # Spajanje odlomaka s točno jednim praznim redom razmaka između njih
+    # Spajanje svih odlomaka s točno jednim praznim redom razmaka između njih
     finalni_tekst = "\n\n".join([odlomak for odlomak in očišćeni_odlomci if odlomak.strip()])
     return finalni_tekst
 
