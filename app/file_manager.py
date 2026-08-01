@@ -42,8 +42,8 @@ class FileManager:
             Finalna putanja (nova ili s suffixom).
         """
         path = Path(dir_path)
-        if suffix_if_exists and path.exists():
-            path = self._suffix_dir(path)
+        if suffix_if_exists:
+            path = Path(self.unique_dir_path(path))
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -51,8 +51,8 @@ class FileManager:
                          suffix_if_exists: bool = False) -> Path:
         """Generira sigurnu putanju za datoteku. Kreira roditeljski direktorij.
 
-        Ako datoteka postoji i suffix_if_exists=True, dodaje (001), (002)...
-        Roditeljski direktorij se uvijek kreira.
+        Ako datoteka postoji i suffix_if_exists=True, dodaje _001, _002...
+        neposredno ispred ekstenzije (nikad ne prepisuje postojeću datoteku).
 
         Args:
             file_path:        Putanja datoteke.
@@ -63,8 +63,8 @@ class FileManager:
         """
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        if suffix_if_exists and path.exists():
-            path = self._suffix_file(path)
+        if suffix_if_exists:
+            path = Path(self.unique_file_path(path))
         return path
 
     def ensure_directories(self) -> None:
@@ -74,33 +74,82 @@ class FileManager:
             logging.debug(f"Direktorij osiguran: {dir_path}")
 
     # -----------------------------------------------------------------------
+    # Jedinstvene putanje (zaštita od prepisivanja)
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def unique_file_path(file_path: str | Path) -> str:
+        """Vraća putanju koja ne prepisuje postojeću datoteku.
+
+        Ako ciljana datoteka ne postoji, vraća original.
+        Ako postoji, dodaje _001, _002... neposredno ispred ekstenzije.
+
+        Primjer:
+            book.txt       (slobodno) → book.txt
+            book.txt       (postoji)  → book_001.txt
+            book_001.txt   (postoji)  → book_002.txt  (bazirano na stemu 'book')
+        """
+        path_str = os.path.normpath(str(file_path))
+        if not os.path.exists(path_str):
+            return path_str
+
+        directory = os.path.dirname(path_str)
+        filename = os.path.basename(path_str)
+        stem, ext = os.path.splitext(filename)
+
+        # Ukloni postojeći inkrementalni sufiks (_001, _002...) da ne gomilamo
+        # npr. book_001.txt → baza "book", pa sljedeći slobodni broj
+        baza = re.sub(r'_\d{3}$', '', stem)
+
+        brojac = 1
+        while True:
+            kandidat = os.path.join(directory, f"{baza}_{brojac:03d}{ext}")
+            if not os.path.exists(kandidat):
+                return kandidat
+            brojac += 1
+
+    @staticmethod
+    def unique_dir_path(dir_path: str | Path) -> str:
+        """Vraća putanju direktorija koja ne dira postojeći direktorij.
+
+        Ako ciljani dir ne postoji, vraća original.
+        Ako postoji, dodaje _001, _002... na kraj naziva mape.
+        """
+        path_str = os.path.normpath(str(dir_path))
+        if not os.path.exists(path_str):
+            return path_str
+
+        # Ukloni postojeći inkrementalni sufiks da brojimo od baze
+        baza = re.sub(r'_\d{3}$', '', path_str)
+
+        brojac = 1
+        while True:
+            kandidat = f"{baza}_{brojac:03d}"
+            if not os.path.exists(kandidat):
+                return kandidat
+            brojac += 1
+
+    # -----------------------------------------------------------------------
     # Book-specific direktoriji
     # -----------------------------------------------------------------------
 
     def book_output_dir(self, book_title: str, author: str) -> Path:
-        """Vraća putanju work/translated/<naziv---autor>/.
+        """Vraća baznu putanju work/translated/<naziv---autor>/.
 
-        Ako direktorij postoji, dodaje suffix _001, _002...
-
-        Args:
-            book_title: Naslov knjige.
-            author:     Autor knjige.
-
-        Returns:
-            Putanja do direktorija za prevedenu knjigu (ne kreira ga).
+        Ne kreira direktorij i ne dodaje sufiks — pozivatelj treba
+        ensure_dir(..., suffix_if_exists=True) za zaštitu od prepisivanja.
         """
         base = Path(self._dirs["translated"])
-        name = self._book_dirname(book_title, author)
-        return self._suffix_dir(base / name) if (base / name).exists() else base / name
+        return base / self._book_dirname(book_title, author)
 
     def audiobook_dir(self, book_title: str, author: str) -> Path:
-        """Vraća putanju work/audiobooks/<naziv---autor>/.
+        """Vraća baznu putanju work/audiobooks/<naziv---autor>/.
 
-        Ista logika kao book_output_dir, za audiobooks.
+        Ne kreira direktorij i ne dodaje sufiks — pozivatelj treba
+        ensure_dir(..., suffix_if_exists=True) za zaštitu od prepisivanja.
         """
         base = Path(self._dirs["audiobooks"])
-        name = self._book_dirname(book_title, author)
-        return self._suffix_dir(base / name) if (base / name).exists() else base / name
+        return base / self._book_dirname(book_title, author)
 
     def work_output_book_dir(self, book_title: str) -> Path:
         """Vraća putanju work/output/<naziv>/ za [fixed] i config.yaml.
@@ -138,7 +187,6 @@ class FileManager:
         name = re.sub(r'\s+', separator, name)
         return name
 
-
     # -----------------------------------------------------------------------
     # Atomski zapis
     # -----------------------------------------------------------------------
@@ -148,6 +196,8 @@ class FileManager:
         """Sigurno pisanje tekstualne datoteke: temp → fsync → rename.
 
         Zaštita od korupcije pri nestanku struje.
+        NAPOMENA: ovo zamjenjuje datoteku na danoj putanji. Za zaštitu od
+        prepisivanja pozovi unique_file_path() / ensure_file_path() prije.
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,29 +227,12 @@ class FileManager:
     @staticmethod
     def _suffix_dir(path: Path) -> Path:
         """Dodaje _001, _002... sufiks ako direktorij postoji."""
-        if not path.exists():
-            return path
-        counter = 1
-        while True:
-            candidate = Path(f"{path}_{counter:03d}")
-            if not candidate.exists():
-                return candidate
-            counter += 1
+        return Path(FileManager.unique_dir_path(path))
 
     @staticmethod
     def _suffix_file(path: Path) -> Path:
-        """Dodaje (001), (002)... sufiks ako datoteka postoji."""
-        if not path.exists():
-            return path
-        stem = path.stem
-        suffix = path.suffix
-        parent = path.parent
-        counter = 0
-        while True:
-            candidate = parent / f"{stem}({counter:03d}){suffix}"
-            if not candidate.exists():
-                return candidate
-            counter += 1
+        """Dodaje _001, _002... sufiks ako datoteka postoji."""
+        return Path(FileManager.unique_file_path(path))
 
     def _book_dirname(self, book_title: str, author: str) -> str:
         """Formatira naziv direktorija kao <naziv>---<autor>."""

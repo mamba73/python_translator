@@ -181,3 +181,39 @@ Velika većina funkcionalnosti iz specifikacije i stare `mamba_voice.py` verzije
 5. 🟡 **LLM debug log (verbatim/llm_responses) je mrtav kod.**
 
 TODO.md **treba ispraviti** — stavke koje tvrde "implementirano" a zapravo nisu funkcionalne moraju ostati neoznačene.
+
+---
+
+## 8. TRENUTNO STANJE NAKON POPRAVAKA (Ažuriranje: 2026-08-01 00:05:00)
+
+Nakon detaljne analize i identificiranja kritičnih propusta, provedena je brza i učinkovita dorada svih ključnih prioriteta. Trenutno stanje sustava je sljedeće:
+
+### 8.1 Popravljeni i dovršeni prioriteti
+
+1. **Auto-detekcija modela i dohvat detalja (Prioritet 3) — 100% UKLONJENO ODSTUPANJE ✅**
+   - Implementirane su metode `_detect_lm_studio_model()` i `_detect_ollama_model()`.
+   - Dodana je nova metoda `dohvati_detalje_modela()` koja rekurzivno preko API-ja povlači metapodatke o modelu (quantization, context length, parameter size, raw information).
+   - Test Header je proširen i sada ispisuje sve te podatke prilikom generiranja testnih prijevoda.
+
+2. **Checkpoint Resume (Prioritet 2) — 100% IMPLEMENTIRANO ✅**
+   - Dodan je parametar `resume_from` u metodu `prevedi_knjigu()`.
+   - Prilikom nastavka, sustav automatski učitava već prevedene segmente, kalkulira akumulirani broj riječi i preskače prevođenje postojećih paragrafa.
+   - U `Menu.run()` ugrađena je kompletna obrada `resume:` povratne vrijednosti iz glavnog izbornika.
+   - Klikom na `[R]` (Nastavi od checkpointa) sustav neprimjetno nastavlja prevođenje točno tamo gdje je stao.
+
+3. **Trorazinsko LLM debug logiranje (Prioritet 1) — 100% IMPLEMENTIRANO ✅**
+   - Integrirani su pozivi `log_llm_response()` unutar `_http_request()` i bilježe punu konverzaciju s promptovima i odgovorima u `llm_responses.log`.
+   - Integrirani su pozivi `log_verbatim()` u `prevedi_segment()` i bilježe točne ulaze i izlaze u `verbatim.log`.
+
+4. **Ispravak Google Gemini integracije (Kritični Bug) — 100% IMPLEMENTIRANO ✅**
+   - Model je ažuriran na najnoviji `gemini-2.0-flash` (stari `1.5-pro` je vraćao 404).
+   - U `config_loader.py` postavljen je `load_dotenv(override=True)` čime se sprječava da prazne sistemske varijable prebrišu vrijednosti iz `.env` datoteke.
+   - Gemini adapter je nadograđen da ispravno koristi `"systemInstruction"` i strukturirane `"contents"` (prije se system prompt ignorirao). Uspješno eliminiran 404 Error!
+
+### 8.2 Preostala odstupanja od Tehničke Dokumentacije (Niski prioritet)
+
+- **Produkcijska statistika `_stats.txt`:** I dalje se ne generira automatski (ostaje u `TODO.md` kao preostali zadatak).
+- **TTS merge_single:** Korisnik je potvrdio da "Jedna datoteka" nije prioritet jer je segmentacija po poglavljima/odlomcima od 500-600 riječi ispravno implementirana i produkcijski superiornija za audiobook format.
+
+### 8.3 Zaključak verifikacije
+Svi kritični i srednji propusti (prioriteti 1, 2 i 3) koji su narušavali rad sustava su **uspješno otklonjeni**. Sustav je u potpunosti stabilan, logovi bilježe detaljne LLM konverzacije, a checkpoint sustav jamči siguran nastavak prevođenja velikih knjiga.

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MambaBookVoice — Prijevod</title>
+  <link rel="stylesheet" href="/css/tailwind.css">
+  <style>
+    body { background-color: #0f172a; color: #e2e8f0; }
+    .nav-link { color: #94a3b8; transition: color 0.15s; }
+    .nav-link:hover { color: #60a5fa; }
+    .nav-link.active { color: #60a5fa; border-bottom: 2px solid #3b82f6; }
+    /* Range slider stil */
+    input[type="range"] { -webkit-appearance: none; appearance: none; height: 6px; background: #374151; border-radius: 3px; outline: none; cursor: pointer; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: #3b82f6; border-radius: 50%; cursor: pointer; }
+    input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; background: #3b82f6; border-radius: 50%; cursor: pointer; border: none; }
+    /* Toggle */
+    .toggle-wrap { position: relative; display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+    .toggle-input { position: absolute; opacity: 0; width: 0; height: 0; }
+    .toggle-bg { width: 48px; height: 26px; background: #374151; border-radius: 13px; transition: background 0.2s; position: relative; }
+    .toggle-input:checked ~ .toggle-bg { background: #2563eb; }
+    .toggle-dot { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; background: white; border-radius: 50%; transition: transform 0.2s; }
+    .toggle-input:checked ~ .toggle-bg .toggle-dot { transform: translateX(22px); }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<nav class="bg-slate-900 border-b border-slate-700 px-6 py-3 flex items-center justify-between sticky top-0 z-20">
+  <div class="flex items-center gap-4">
+    <span class="text-blue-400 font-bold text-lg tracking-wide">🎙 MambaBookVoice</span>
+    <span class="text-gray-500 text-xs">v4.5</span>
+  </div>
+  <div class="flex items-center gap-6 text-sm">
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/konverzija" class="nav-link">Konverzija</a>
+    <a href="/ciscenje" class="nav-link">Čišćenje</a>
+    <a href="/prevod" class="nav-link active pb-1">Prijevod</a>
+    <a href="/mp3" class="nav-link">MP3</a>
+  </div>
+  <div id="status-bar" class="flex items-center gap-4 text-xs text-gray-400">
+    <span><span id="lm-status-dot" class="inline-block w-2 h-2 rounded-full bg-gray-500 mr-1"></span><span id="lm-status-txt">LM Studio</span></span>
+    <span id="cp-count"></span>
+  </div>
+</nav>
+
+<div id="toast-container" class="fixed top-16 right-4 z-50 w-80"></div>
+
+<main class="max-w-7xl mx-auto px-6 py-8">
+
+  <div class="mb-6">
+    <div class="text-xs text-yellow-400 uppercase tracking-wider mb-1">Korak 3</div>
+    <h1 class="text-2xl font-bold text-white">LLM Prijevod</h1>
+    <p class="text-gray-400 text-sm mt-1">Samo <code class="text-green-400">[fixed]</code> datoteke su dostupne za prijevod.</p>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+    <!-- Lijeva strana: odabir datoteke i gumbi -->
+    <div class="space-y-4">
+
+      <!-- Odabir datoteke -->
+      <div class="bg-slate-800 border border-slate-700 rounded-xl p-5">
+        <label class="block text-sm font-medium text-gray-300 mb-2">Datoteka za prijevod</label>
+        <select id="fixed-select"
+          class="w-full bg-gray-900 border border-gray-600 text-gray-200 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 appearance-none cursor-pointer">
+          <option value="">Učitavanje...</option>
+        </select>
+      </div>
+
+      <!-- Gumbi akcije -->
+      <div class="bg-slate-800 border border-slate-700 rounded-xl p-5">
+        <div class="text-sm font-medium text-gray-300 mb-3">Pokretanje prijevoda</div>
+        <div class="flex gap-3">
+          <button id="btn-test"
+            class="flex-1 px-4 py-3 bg-yellow-600 hover:bg-yellow-500 text-white font-semibold text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            🧪 Pokreni TEST
+          </button>
+          <button id="btn-produkcija"
+            class="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            🚀 Produkcijski prijevod
+          </button>
+        </div>
+        <p class="text-xs text-gray-500 mt-2">TEST prevodi samo N odlomaka. Produkcijski prevodi cijelu knjigu s checkpointovima.</p>
+      </div>
+
+    </div>
+
+    <!-- Desna strana: opcije -->
+    <div class="bg-slate-800 border border-slate-700 rounded-xl p-5 space-y-5">
+      <div class="text-sm font-semibold text-gray-200 mb-1">⚙️ Opcije prevođenja</div>
+      <p class="text-xs text-gray-500 -mt-2">Svaka promjena se automatski sprema u settings.yaml.</p>
+
+      <!-- Slajder: Količina testnih odlomaka -->
+      <div>
+        <div class="flex justify-between items-center mb-2">
+          <label class="text-sm text-gray-300">Testnih odlomaka</label>
+          <span id="kolicina-val" class="text-blue-400 font-bold text-sm w-8 text-right">1</span>
+        </div>
+        <input id="kolicina-slider" type="range" min="1" max="100" value="1" class="w-full">
+        <div class="flex justify-between text-xs text-gray-600 mt-1"><span>1</span><span>50</span><span>100</span></div>
+      </div>
+
+      <!-- Toggle: Payload Header -->
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-sm text-gray-300">Payload Header</div>
+          <div class="text-xs text-gray-500">Dodaje metadata zaglavlje u TEST prijevod</div>
+        </div>
+        <label class="toggle-wrap">
+          <input id="header-toggle" type="checkbox" class="toggle-input" checked>
+          <div class="toggle-bg"><div class="toggle-dot"></div></div>
+          <span class="text-sm text-gray-300 ml-1">ON</span>
+        </label>
+      </div>
+
+      <!-- Dropdown: Granularnost -->
+      <div>
+        <label class="block text-sm text-gray-300 mb-1.5">Granularnost segmentacije</label>
+        <select id="granularnost-select"
+          class="w-full bg-gray-900 border border-gray-600 text-gray-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 appearance-none cursor-pointer">
+          <option value="paragraph">Odlomak (Paragraph)</option>
+          <option value="sentence">Rečenica (Sentence)</option>
+        </select>
+      </div>
+
+      <!-- Dropdown: Profil knjige -->
+      <div>
+        <label class="block text-sm text-gray-300 mb-1.5">Konfiguracijski profil knjige</label>
+        <select id="profil-select"
+          class="w-full bg-gray-900 border border-gray-600 text-gray-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 appearance-none cursor-pointer">
+          <option value="">Učitavanje profila...</option>
+        </select>
+      </div>
+
+    </div>
+  </div>
+
+</main>
+
+<div class="max-w-7xl mx-auto px-6 pb-8">
+  <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Live Log Console</h2>
+  <div id="live-console" class="bg-black text-green-400 p-4 font-mono text-xs h-48 overflow-y-auto rounded-lg shadow-inner border border-gray-800"></div>
+</div>
+
+<script src="/js/main.js"></script>
+<script src="/js/prevod.js"></script>
+<script>
+  // Toggle label ažuriranje
+  document.getElementById('header-toggle')?.addEventListener('change', function() {
+    const label = this.parentElement.querySelector('span');
+    if (label) label.textContent = this.checked ? 'ON' : 'OFF';
+  });
+</script>
+</body>
+</html>

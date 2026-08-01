@@ -2,6 +2,9 @@
 # Putanja i ime: ./start
 # Verzija: 2.0.0 - Dynamic Book Translator v0.4
 
+# Prisilno postavljanje UTF-8 enkodiranja za izlaz u terminal (Windows Git Bash / konzola)
+export PYTHONIOENCODING=utf-8
+
 # Naziv virtualnog okruženja
 VENV_DIR="knjige_env"
 

@@ -107,20 +107,43 @@ def save_settings(cfg: dict[str, Any]) -> None:
     """Atomski zapis promijenjenih OPCIJA natrag u settings.yaml.
 
     Koristi se za persistenciju OPCIJA (granularnost, test_header, default_count).
-    API ključevi se NE zapisuju — ostaju u .env.
+    API ključevi se NE zapisuju — ostaju isključivo u .env datoteci.
 
     Args:
         cfg: Ažurirana konfiguracija.
     """
+    import copy
+
     # Ukloni interno stanje prije zapisa
     clean = {k: v for k, v in cfg.items() if not k.startswith("_")}
+
+    # Deep copy da ne mutiramo in-memory config
+    clean = copy.deepcopy(clean)
+
+    # SIGURNOST: Ukloni sve api_key vrijednosti iz providera — nikad ne smiju
+    # biti zapisani u YAML. Samo key_env reference ostaju.
+    providers = clean.get("api", {}).get("providers", {})
+    for provider_cfg in providers.values():
+        provider_cfg.pop("api_key", None)
+
+    # Vrati relativne putanje direktorija radi čistoće u settings.yaml
+    if "directories" in clean and isinstance(clean["directories"], dict):
+        clean_dirs = {}
+        for k, v in clean["directories"].items():
+            try:
+                rel = Path(v).relative_to(_ROOT)
+                clean_dirs[k] = f"./{rel.as_posix()}"
+            except Exception:
+                clean_dirs[k] = v
+        clean["directories"] = clean_dirs
 
     tmp = str(_SETTINGS_FILE) + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         yaml.dump(clean, f, allow_unicode=True, default_flow_style=False,
                   sort_keys=False)
     os.replace(tmp, _SETTINGS_FILE)
-    logging.debug("config/settings.yaml ažuriran.")
+    logging.debug("config/settings.yaml ažuriran (api_key polja nisu zapisana).")
+
 
 
 def create_book_config(book_dir: Path | str,
@@ -193,13 +216,29 @@ def _load_dotenv() -> None:
 
 
 def _inject_api_keys(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Za svaki provider koji ima key_env, popuni api_key iz environment varijable."""
+    """Za svaki provider koji ima key_env, popuni api_key iz environment varijable.
+
+    Raises:
+        ValueError: ako aktivni provider nema postavljenu varijablu u .env.
+    """
     providers = cfg.get("api", {}).get("providers", {})
+    active_provider = cfg.get("api", {}).get("provider", "")
+
     for provider_name, provider_cfg in providers.items():
         key_env = provider_cfg.get("key_env")
-        if key_env:
-            value = os.getenv(key_env, "")
-            provider_cfg["api_key"] = value
+        if not key_env:
+            continue
+
+        value = os.getenv(key_env, "")
+        provider_cfg["api_key"] = value
+
+        # Upozori samo za aktivni provider koji zahtijeva ključ
+        if provider_name == active_provider and not value:
+            raise ValueError(
+                f"Greška: Varijabla [{key_env}] nije postavljena u .env datoteci! "
+                f"Provider '{provider_name}' zahtijeva API ključ."
+            )
+
     return cfg
 
 

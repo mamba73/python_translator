@@ -237,7 +237,7 @@ class DocumentProcessor:
         if len(poglavlja) == 1 and poglavlja[0]["naslov"] == "Prologue/Pre-Chapter Text":
             logging.warning("Nije detektirana struktura poglavlja preko Regexa. Pokrećem automatsko rezanje.")
             poglavlja = []
-            velicina_bloka = 15000
+            velicina_bloka = self._cfg.get("translation", {}).get("fallback_chunk_size", 15000)
             pun_tekst = "\n".join(trenutni_tekst) if trenutni_tekst else tekst
             za_rezanje = [pun_tekst[i:i + velicina_bloka] for i in range(0, len(pun_tekst), velicina_bloka)]
             for idx, blok in enumerate(za_rezanje):

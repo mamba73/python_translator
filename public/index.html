@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MambaBookVoice — Dashboard</title>
+  <link rel="stylesheet" href="/css/tailwind.css">
+  <style>
+    body { background-color: #0f172a; color: #e2e8f0; }
+    .card-hover { transition: transform 0.2s, box-shadow 0.2s; }
+    .card-hover:hover { transform: translateY(-3px); box-shadow: 0 8px 32px rgba(59,130,246,0.15); }
+    .nav-link { color: #94a3b8; transition: color 0.15s; }
+    .nav-link:hover { color: #60a5fa; }
+    .nav-link.active { color: #60a5fa; border-bottom: 2px solid #3b82f6; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<!-- Navigacija -->
+<nav class="bg-slate-900 border-b border-slate-700 px-6 py-3 flex items-center justify-between sticky top-0 z-20">
+  <div class="flex items-center gap-4">
+    <span class="text-blue-400 font-bold text-lg tracking-wide">🎙 MambaBookVoice</span>
+    <span class="text-gray-500 text-xs">v4.5</span>
+  </div>
+  <div class="flex items-center gap-6 text-sm">
+    <a href="/" class="nav-link active pb-1">Dashboard</a>
+    <a href="/konverzija" class="nav-link">Konverzija</a>
+    <a href="/ciscenje" class="nav-link">Čišćenje</a>
+    <a href="/prevod" class="nav-link">Prijevod</a>
+    <a href="/mp3" class="nav-link">MP3</a>
+  </div>
+  <div id="status-bar" class="flex items-center gap-4 text-xs text-gray-400">
+    <span>
+      <span id="lm-status-dot" class="inline-block w-2 h-2 rounded-full bg-gray-500 mr-1"></span>
+      <span id="lm-status-txt">LM Studio: Provjera...</span>
+    </span>
+    <span id="cp-count">Checkpointi: —</span>
+    <span id="sys-cpu"></span>
+    <span id="sys-ram"></span>
+  </div>
+</nav>
+
+<!-- Toast kontejner -->
+<div id="toast-container" class="fixed top-16 right-4 z-50 w-80"></div>
+
+<!-- Glavni sadržaj -->
+<main class="max-w-7xl mx-auto px-6 py-8">
+
+  <!-- Hero naslov -->
+  <div class="mb-8">
+    <h1 class="text-3xl font-bold text-white mb-1">Nadzorna ploča</h1>
+    <p class="text-gray-400 text-sm">Odaberite korak obrade ili pratite aktivne procese u nastavku.</p>
+  </div>
+
+  <!-- Kartice za 4 koraka -->
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+
+    <a href="/konverzija" class="card-hover block bg-slate-800 border border-slate-700 rounded-xl p-6 cursor-pointer">
+      <div class="text-3xl mb-3">📄</div>
+      <div class="text-xs text-blue-400 uppercase tracking-wider mb-1">Korak 1</div>
+      <h2 class="text-lg font-semibold text-white mb-2">Konverzija</h2>
+      <p class="text-gray-400 text-sm">PDF, DOCX, EPUB, MOBI → TXT/MD. Batch odabir s sortiranjem.</p>
+    </a>
+
+    <a href="/ciscenje" class="card-hover block bg-slate-800 border border-slate-700 rounded-xl p-6 cursor-pointer">
+      <div class="text-3xl mb-3">🧹</div>
+      <div class="text-xs text-green-400 uppercase tracking-wider mb-1">Korak 2</div>
+      <h2 class="text-lg font-semibold text-white mb-2">Čišćenje</h2>
+      <p class="text-gray-400 text-sm">Uklanjanje tehničkog šuma i priprema <code class="text-green-400">[fixed]</code> datoteka.</p>
+    </a>
+
+    <a href="/prevod" class="card-hover block bg-slate-800 border border-slate-700 rounded-xl p-6 cursor-pointer">
+      <div class="text-3xl mb-3">🌐</div>
+      <div class="text-xs text-yellow-400 uppercase tracking-wider mb-1">Korak 3</div>
+      <h2 class="text-lg font-semibold text-white mb-2">Prijevod</h2>
+      <p class="text-gray-400 text-sm">LLM prijevod s podešavanjem granularnosti, headera i profila.</p>
+    </a>
+
+    <a href="/mp3" class="card-hover block bg-slate-800 border border-slate-700 rounded-xl p-6 cursor-pointer">
+      <div class="text-3xl mb-3">🎧</div>
+      <div class="text-xs text-orange-400 uppercase tracking-wider mb-1">Korak 4</div>
+      <h2 class="text-lg font-semibold text-white mb-2">MP3 Audiobook</h2>
+      <p class="text-gray-400 text-sm">TTS sinteza prevedenih tekstova u MP3 audiobook.</p>
+    </a>
+
+  </div>
+
+  <!-- Aktivni checkpointovi -->
+  <section class="mb-10">
+    <h2 class="text-xl font-semibold text-white mb-4">🔄 Aktivni checkpointovi</h2>
+    <div id="checkpointi-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div class="bg-slate-800 border border-slate-700 rounded-xl p-5 text-center text-gray-500 text-sm">
+        Učitavanje...
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- Live Console -->
+<div class="max-w-7xl mx-auto px-6 pb-8">
+  <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Live Log Console</h2>
+  <div id="live-console" class="bg-black text-green-400 p-4 font-mono text-xs h-48 overflow-y-auto rounded-lg shadow-inner border border-gray-800">
+    <div class="text-gray-600">Čekam vezu s poslužiteljem...</div>
+  </div>
+</div>
+
+<script src="/js/main.js"></script>
+<script>
+  // Učitaj checkpointe
+  async function ucitajCheckpointe() {
+    const grid = document.getElementById('checkpointi-grid');
+    try {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+      const cps = data.checkpointi || [];
+
+      if (cps.length === 0) {
+        grid.innerHTML = '<div class="bg-slate-800 border border-slate-700 rounded-xl p-5 text-center text-gray-500 text-sm">Nema aktivnih checkpointova.</div>';
+        return;
+      }
+
+      grid.innerHTML = '';
+      cps.forEach(cp => {
+        const postotak = cp.postotak || 0;
+        const card = document.createElement('div');
+        card.className = 'bg-slate-800 border border-slate-700 rounded-xl p-5';
+        card.innerHTML = `
+          <div class="flex justify-between items-start mb-3">
+            <div>
+              <div class="font-semibold text-white text-sm">${escHtml(cp.book_title || 'Nepoznato')}</div>
+              <div class="text-xs text-gray-400 mt-0.5">${escHtml(cp.author || '')}</div>
+            </div>
+            <span class="text-blue-400 font-bold text-lg">${postotak}%</span>
+          </div>
+          <div class="mb-3">
+            <div class="bg-gray-700 rounded-full h-2">
+              <div class="bg-blue-500 h-2 rounded-full" style="width:${Math.min(postotak,100)}%"></div>
+            </div>
+            <div class="text-xs text-gray-500 mt-1">${cp.current_segment || 0} / ${cp.total_segments || 0} segmenata</div>
+          </div>
+          <div class="text-xs text-gray-500">${cp.timestamp || ''}</div>
+          <a href="/prevod" class="mt-3 inline-block px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded transition-colors">Nastavi →</a>
+        `;
+        grid.appendChild(card);
+      });
+    } catch (e) {
+      grid.innerHTML = '<div class="bg-slate-800 border border-red-900 rounded-xl p-5 text-center text-red-400 text-sm">Greška pri učitavanju.</div>';
+    }
+  }
+
+  function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  document.addEventListener('DOMContentLoaded', ucitajCheckpointe);
+</script>
+</body>
+</html>

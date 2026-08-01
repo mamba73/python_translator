@@ -292,6 +292,10 @@ class Translator:
             try:
                 prijevod = self.prevedi_segment(segment)
                 prevedeni.append(prijevod)
+            except (KeyboardInterrupt, InterruptedError) as e:
+                logging.warning(f"Prevođenje prekinuto od strane korisnika: {e}")
+                je_prekinuto = True
+                break
             except Exception as e:
                 logging.error(f"Greška pri prevođenju segmenta {idx + 1}/{ukupno}: {e}")
                 prevedeni.append(segment)  # Fallback na original
@@ -550,51 +554,89 @@ class Translator:
 
     def _http_request(self, url: str, payload: dict[str, Any],
                      headers: dict[str, str] | None = None) -> str:
-        """Izvršava HTTP POST request."""
+        """Izvršava HTTP POST request s automatskim retry mehanizmom za HTTP 429 (Too Many Requests).
+
+        Parametri za retry (max_attempts, initial_delay, backoff_factor) čitaju se iz konfiguracije (settings.yaml).
+        Tijekom svakog automatskog pokušaja ispisuje se vizualno odbrojavanje sekundu po sekundu.
+        Nakon iscrpljenog broja automatskih pokušaja, korisnika se pita želi li pokušati ponovno [Y] ili prekinuti [X].
+        """
         if headers is None:
             headers = {"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"}
 
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
-        try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
-                response_data = json.loads(response.read().decode('utf-8'))
-                # Standard OpenAI format
-                if "choices" in response_data:
-                    result = response_data["choices"][0]["message"]["content"].strip()
-                    # P1: Logiraj LLM razgovor (prompt + response)
-                    user_msg = ""
-                    for m in payload.get("messages", []):
-                        if m.get("role") == "user":
-                            user_msg = m.get("content", "")
-                            break
-                    log_llm_response(user_msg, result, {
-                        "provider": self._provider,
-                        "url": url,
-                        "model": payload.get("model", ""),
-                    })
-                    return result
-                # Fallback - vrati cijeli response
-                return str(response_data)
-        except urllib.error.HTTPError as e:
-            logging.error(f"HTTP greška: {e.code} - {e.reason}")
-            raise
-        except urllib.error.URLError as e:
-            logging.error(f"URL greška: {e.reason}")
-            raise
-        except json.JSONDecodeError as e:
-            logging.error(f"JSON decode error: {e}")
-            raise
+        pokusaj = 0
+        max_automatskih = self._api_cfg.get("retry_max_attempts", 3)
+        pocetni_delay = self._api_cfg.get("retry_initial_delay", 10)
+        backoff_factor = self._api_cfg.get("retry_backoff_factor", 2)
+        trenutni_delay = pocetni_delay
+
+        while True:
+            request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                    response_data = json.loads(response.read().decode('utf-8'))
+                    # Standard OpenAI format
+                    if "choices" in response_data:
+                        result = response_data["choices"][0]["message"]["content"].strip()
+                        # P1: Logiraj LLM razgovor (prompt + response)
+                        user_msg = ""
+                        for m in payload.get("messages", []):
+                            if m.get("role") == "user":
+                                user_msg = m.get("content", "")
+                                break
+                        log_llm_response(user_msg, result, {
+                            "provider": self._provider,
+                            "url": url,
+                            "model": payload.get("model", ""),
+                        })
+                        return result
+                    # Fallback - vrati cijeli response
+                    return str(response_data)
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    pokusaj += 1
+                    if pokusaj <= max_automatskih:
+                        logging.warning(f"\n⚠️ HTTP 429 (Too Many Requests) - automatski pokušaj {pokusaj}/{max_automatskih}.")
+                        import time
+                        # Odbrojavanje na ekranu sekundu po sekundu
+                        for preostalo in range(trenutni_delay, 0, -1):
+                            print(f"\rOdbrojavanje do sljedećeg pokušaja: {preostalo}s...   ", end="", flush=True)
+                            time.sleep(1)
+                        print("\r" + " " * 60 + "\r", end="", flush=True)  # očisti liniju
+                        trenutni_delay *= backoff_factor  # eksponencijalni delay iz konfiguracije
+                        continue
+                    else:
+                        # Maksimalan broj automatskih pokušaja premašen, pitaj korisnika
+                        print("\n⚠️ Svi automatski pokušaji ponavljanja (HTTP 429) su neuspješni.")
+                        while True:
+                            izbor = input("Želite li pokušati ponovno [Y] ili prekinuti proces [X]? (Y/X): ").strip().upper()
+                            if izbor in ("Y", "D", "DA", "YES", "P"):
+                                pokusaj = 0  # resetiraj pokušaje
+                                trenutni_delay = pocetni_delay  # resetiraj delay
+                                break
+                            elif izbor in ("X", "N", "NE", "NO"):
+                                logging.error("HTTP 429: Korisnik je odabrao prekid procesa.")
+                                raise InterruptedError("Proces prekinut od strane korisnika na HTTP 429 grešci.")
+                else:
+                    logging.error(f"HTTP greška: {e.code} - {e.reason}")
+                    raise
+            except urllib.error.URLError as e:
+                logging.error(f"URL greška: {e.reason}")
+                raise
+            except json.JSONDecodeError as e:
+                logging.error(f"JSON decode error: {e}")
+                raise
 
     # -----------------------------------------------------------------------
     # Pomoćne metode
     # -----------------------------------------------------------------------
 
     def _je_strukturni_ili_kratak(self, tekst: str) -> bool:
-        """Detektira je li tekst strukturni ili prekratak za LLM."""
+        """Detektira je li tekst strukturni ili prekratak za LLM (koristeći parametre iz konfiga)."""
         tekst = tekst.strip()
-        if len(tekst) < 10:
+        min_len = self._trans_cfg.get("min_segment_length", 10)
+        if len(tekst) < min_len:
             return True
         # Samo brojevi, znakovi, prazno
         if re.match(r'^[\d\s\-\*\#\.]+$', tekst):
@@ -602,8 +644,11 @@ class Translator:
         return False
 
     def _generiraj_default_system_prompt(self) -> str:
-        """Generira default system prompt."""
-        return "Ti si stručni prevoditelj s engleskog na hrvatski. Prevedi dani tekst točno i prirodno."
+        """Generira default system prompt iz konfiguracije."""
+        return self._trans_cfg.get(
+            "default_system_prompt",
+            "Ti si stručni prevoditelj s engleskog na hrvatski. Prevedi dani tekst točno i prirodno."
+        )
 
     def _generiraj_test_header(self, kolicina: int, granularnost: str) -> str:
         """Generira header za testni prijevod s detaljima aktivnog modela.
@@ -723,10 +768,11 @@ class Translator:
         provider_cfg = self._api_cfg.get("providers", {}).get("lm_studio", {})
         base_url = provider_cfg.get("base_url", "http://127.0.0.1:1234/v1")
         models_url = f"{base_url}/models"
+        detect_timeout = self._api_cfg.get("auto_detect_timeout", 5)
 
         try:
             request = urllib.request.Request(models_url, method="GET")
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with urllib.request.urlopen(request, timeout=detect_timeout) as response:
                 data = json.loads(response.read().decode('utf-8'))
                 if data.get("data") and len(data["data"]) > 0:
                     model_id = data["data"][0]["id"]
@@ -745,10 +791,11 @@ class Translator:
         provider_cfg = self._api_cfg.get("providers", {}).get("ollama_local", {})
         base_url = provider_cfg.get("base_url", "http://127.0.0.1:11434/api")
         tags_url = f"{base_url}/tags"
+        detect_timeout = self._api_cfg.get("auto_detect_timeout", 5)
 
         try:
             request = urllib.request.Request(tags_url, method="GET")
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with urllib.request.urlopen(request, timeout=detect_timeout) as response:
                 data = json.loads(response.read().decode('utf-8'))
                 if data.get("models") and len(data["models"]) > 0:
                     model_name = data["models"][0]["name"]
@@ -776,6 +823,7 @@ class Translator:
             "context_length": "",
             "raw": None,
         }
+        detect_timeout = self._api_cfg.get("auto_detect_timeout", 5)
 
         try:
             if self._provider == "lm_studio":
@@ -783,7 +831,7 @@ class Translator:
                 base_url = provider_cfg.get("base_url", "http://127.0.0.1:1234/v1")
                 models_url = f"{base_url}/models"
                 request = urllib.request.Request(models_url, method="GET")
-                with urllib.request.urlopen(request, timeout=5) as response:
+                with urllib.request.urlopen(request, timeout=detect_timeout) as response:
                     data = json.loads(response.read().decode('utf-8'))
                     if data.get("data") and len(data["data"]) > 0:
                         model_info = data["data"][0]
@@ -797,7 +845,7 @@ class Translator:
                 base_url = provider_cfg.get("base_url", "http://127.0.0.1:11434/api")
                 tags_url = f"{base_url}/tags"
                 request = urllib.request.Request(tags_url, method="GET")
-                with urllib.request.urlopen(request, timeout=5) as response:
+                with urllib.request.urlopen(request, timeout=detect_timeout) as response:
                     data = json.loads(response.read().decode('utf-8'))
                     if data.get("models") and len(data["models"]) > 0:
                         model_info = data["models"][0]

@@ -68,14 +68,16 @@
 - [x] `app/translator.py`
   - [x] `_api_call(messages, config)` — privatna metoda, objedinjuje duplikat koda
   - [x] `_build_payload()` — gradi API payload
+  - [x] `_http_request()` — potpun HTTP 429 retry mehanizam s odbrojavanjem sekundu po sekundu, konfigurabilnim retry parametrima (`retry_max_attempts`, `retry_initial_delay`, `retry_backoff_factor`) i korisničkim odabirom (Y/X) nakon iscrpljenih pokušaja
   - [x] Adaptori po provideru: `lm_studio`, `ollama_local`, `ollama_cloud`, `openai`, `gemini`, `qwen`, `custom`
-  - [ ] `detektiraj_aktivni_model()` — **NEDOVRŠENO** (poziva `_detect_lm_studio_model`/`_detect_ollama_model` koje NE POSTOJE → AttributeError)
-  - [x] `je_strukturni_ili_kratak()` — migrirati
+  - [x] `detektiraj_aktivni_model()` — automatska detekcija LM Studio / Ollama aktivnog modela s detaljima
+  - [x] `je_strukturni_ili_kratak()` — migrirati (konfigurabilna minimalna duljina)
   - [x] `generiraj_system_prompt_sa_memorijom()` — proširiti na CHARACTERS + GLOSSARY + GRAMMAR_FIXES
   - [x] `prevedi_segment()` — unificirana metoda za odlomak/paragraf/rečenicu
   - [x] `prevedi_knjigu()` — produkcijski prijevod, čisti output, checkpoint
   - [x] `prevedi_test()` — testni prijevod, header kao opcija, sprema `last_test.json`
   - [x] `prikazi_prekid_meni()` — migrirati
+  - [x] **Zero Hardcoding** — sve konfiguracijske postavke čitaju se iz `config/settings.yaml` i `config.yaml`
 
 - [x] `app/checkpoint.py`
   - [x] `atomic_write()` / `atomic_write_json()` — migrirati
@@ -114,7 +116,7 @@
 ## FAZA 5 — Integracija i `main.py` ⚠️
 
 - [x] `main.py` — čisti orkestrator, samo pozivi modula iz `app/`
-- [ ] Checkpoint blok na vrhu glavnog izbornika — **NEDOVRŠENO** (blok se prikazuje, ali `Menu.run()` ne rukuje `resume:` → nastavak ne radi; `prevedi_knjigu()` nema `resume_from` parametar)
+- [x] Checkpoint blok na vrhu glavnog izbornika — podržava 1-click nastavak preko `Menu.run()` i `resume_from` parametra u `prevedi_knjigu()`
 - [x] BRZI TEST (`Y`) — 1-click pokretanje iz `last_test.json`
 - [x] Batch odabir: `1`, `1,3,5`, `1-5`, `*` — u svim fazama
 - [x] Per-book `config.yaml` — kreirati pri prvoj obradi ako ne postoji
@@ -127,7 +129,7 @@
 ## FAZA 6 — Poliranje i verifikacija ⚠️
 
 - [ ] TTS "Jedna datoteka" (`merge_single`) — **NEDOVRŠENO** (`tts_engine.py` ima TODO placeholder; vraća sve segmente umjesto spojene MP3)
-- [ ] Trorazinsko logiranje — **NEDOVRŠENO** (`log_verbatim()`/`log_llm_response()` definirane u `logger.py` ali se NE POZIVAJU nigdje u kodu; samo osnovna razina aktivna)
+- [x] Trorazinsko logiranje — `log_verbatim()` i `log_llm_response()` su integrirani i aktivni u `translator.py`
 
 - [x] Zamijeniti sve globalne varijable s instance atributima klasa
 - [x] Ukloniti `mamba_voice.py` nakon što su svi moduli migrirani i verificirani

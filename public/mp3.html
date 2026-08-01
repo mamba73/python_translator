@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MambaBookVoice — MP3 Audiobook</title>
+  <link rel="stylesheet" href="/css/tailwind.css">
+  <style>
+    body { background-color: #0f172a; color: #e2e8f0; }
+    .nav-link { color: #94a3b8; transition: color 0.15s; }
+    .nav-link:hover { color: #60a5fa; }
+    .nav-link.active { color: #60a5fa; border-bottom: 2px solid #3b82f6; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<nav class="bg-slate-900 border-b border-slate-700 px-6 py-3 flex items-center justify-between sticky top-0 z-20">
+  <div class="flex items-center gap-4">
+    <span class="text-blue-400 font-bold text-lg tracking-wide">🎙 MambaBookVoice</span>
+    <span class="text-gray-500 text-xs">v4.5</span>
+  </div>
+  <div class="flex items-center gap-6 text-sm">
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/konverzija" class="nav-link">Konverzija</a>
+    <a href="/ciscenje" class="nav-link">Čišćenje</a>
+    <a href="/prevod" class="nav-link">Prijevod</a>
+    <a href="/mp3" class="nav-link active pb-1">MP3</a>
+  </div>
+  <div id="status-bar" class="flex items-center gap-4 text-xs text-gray-400">
+    <span><span id="lm-status-dot" class="inline-block w-2 h-2 rounded-full bg-gray-500 mr-1"></span><span id="lm-status-txt">LM Studio</span></span>
+    <span id="cp-count"></span>
+  </div>
+</nav>
+
+<div id="toast-container" class="fixed top-16 right-4 z-50 w-80"></div>
+
+<main class="max-w-7xl mx-auto px-6 py-8">
+
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <div class="text-xs text-orange-400 uppercase tracking-wider mb-1">Korak 4</div>
+      <h1 class="text-2xl font-bold text-white">TTS Sinteza — MP3 Audiobook</h1>
+      <p class="text-gray-400 text-sm mt-1">Odaberite prevedeni tekst i pokrenite sintezu. Backend automatski duplicira audiobook mapu ako već postoji.</p>
+    </div>
+  </div>
+
+  <!-- Opcije načina -->
+  <div class="bg-slate-800 border border-slate-700 rounded-xl p-4 mb-4 flex items-center gap-6">
+    <span class="text-sm text-gray-300 font-medium">Način sinteze:</span>
+    <label class="flex items-center gap-2 cursor-pointer">
+      <input type="radio" name="nacin" value="zasebne" checked class="accent-blue-500">
+      <span class="text-sm text-gray-200">Zasebne MP3 datoteke po segmentima</span>
+    </label>
+    <label class="flex items-center gap-2 cursor-pointer">
+      <input type="radio" name="nacin" value="jedna" class="accent-blue-500">
+      <span class="text-sm text-gray-200">Jedna MP3 datoteka (cijela knjiga)</span>
+    </label>
+    <div class="ml-auto flex items-center gap-3">
+      <div id="tts-progress" class="hidden flex items-center gap-2 text-sm text-yellow-400">
+        <div class="animate-spin w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full"></div>
+        TTS u tijeku...
+      </div>
+      <button id="btn-generiraj-mp3"
+        class="px-5 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+        🎧 Generiraj MP3 audiobook
+      </button>
+    </div>
+  </div>
+
+  <!-- Napomena o autodupliciranju -->
+  <div class="bg-orange-900 border border-orange-700 rounded-lg px-4 py-3 mb-4 text-sm text-orange-200">
+    ℹ️ Ako audiobook mapa već postoji, backend automatski kreira novu mapu s oznakom <code>_001</code>, <code>_002</code>, itd. — stara snimka ostaje netaknuta.
+  </div>
+
+  <!-- Tablica prevedenih datoteka -->
+  <div class="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
+    <table id="translated-table" class="w-full text-sm border-collapse">
+      <thead class="bg-slate-900 text-gray-400 text-xs uppercase tracking-wider">
+        <tr>
+          <th class="py-3 px-3 w-8"></th>
+          <th class="py-3 px-3 text-left" data-sort="ime">Datoteka</th>
+          <th class="py-3 px-3 text-left" data-sort="tip">Tip prijevoda</th>
+          <th class="py-3 px-3 text-left" data-sort="velicina">Veličina</th>
+          <th class="py-3 px-3 text-left" data-sort="izmijenjeno">Datum izmjene</th>
+        </tr>
+      </thead>
+      <tbody id="translated-tbody">
+        <tr><td colspan="5" class="text-center py-8 text-gray-500">Učitavanje...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</main>
+
+<div class="max-w-7xl mx-auto px-6 pb-8">
+  <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Live Log Console</h2>
+  <div id="live-console" class="bg-black text-green-400 p-4 font-mono text-xs h-48 overflow-y-auto rounded-lg shadow-inner border border-gray-800"></div>
+</div>
+
+<script src="/js/main.js"></script>
+<script src="/js/mp3.js"></script>
+</body>
+</html>

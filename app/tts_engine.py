@@ -205,7 +205,10 @@ class TTSEngine:
         # Podijeli na poglavlja (jednostavna heuristika - po \n\n\n)
         poglavlja_tekst = tekst.split('\n\n\n')
 
-        output_dir = self._fm.ensure_dir(output_dir, suffix_if_exists=True)
+        # Direktorij mora biti unaprijed osiguran od pozivatelja (menu)
+        # s unique suffix logikom — ovdje samo kreiramo ako nedostaje,
+        # bez ponovnog sufiksiranja (izbjegava dvostruki _001).
+        output_dir = self._fm.ensure_dir(output_dir, suffix_if_exists=False)
 
         global_counter = 1
         sve_mp3_putanje = []
