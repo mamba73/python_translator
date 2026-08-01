@@ -20,6 +20,14 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from app.logger import FlushFileHandler, setup_logging, get_session_log_dir
+
+# Učitaj .env odmah pri importu — prije bilo kakvih config poziva
+try:
+    from dotenv import load_dotenv as _load_dotenv_now
+    _load_dotenv_now(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
+except ImportError:
+    pass
 
 # ---------------------------------------------------------------------------
 # Putanje
@@ -32,37 +40,10 @@ INPUT_DIR = WORK_DIR / "input"
 OUTPUT_DIR = WORK_DIR / "output"
 TRANSLATED_DIR = WORK_DIR / "translated"
 STATE_DIR = WORK_DIR / "state"
+LOG_DIR = WORK_DIR / "logs"
 
 sys.path.insert(0, str(ROOT))
 
-# ---------------------------------------------------------------------------
-# WebSocket log handler — šalje log poruke svim spojenim klijentima
-# ---------------------------------------------------------------------------
-class WebSocketLogHandler(logging.Handler):
-    """Preusmjerava logging poruke na WebSocket klijente."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.connections: list[WebSocket] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        msg = self.format(record)
-        asyncio.create_task(self._broadcast(msg))
-
-    async def _broadcast(self, msg: str) -> None:
-        dead: list[WebSocket] = []
-        for ws in self.connections:
-            try:
-                await ws.send_text(msg)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.connections.remove(ws)
-
-
-ws_log_handler = WebSocketLogHandler()
-ws_log_handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
-logging.getLogger().addHandler(ws_log_handler)
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -72,6 +53,19 @@ app = FastAPI(title="MambaBookVoice Web GUI", version="1.0.0")
 # Statičke datoteke
 app.mount("/css", StaticFiles(directory=str(PUBLIC_DIR / "css")), name="css")
 app.mount("/js", StaticFiles(directory=str(PUBLIC_DIR / "js")), name="js")
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    """Inicijalizira logging s vremenskim žigom sesije.
+
+    Kreira work/logs/session_YYYYMMDD_HHMMSS/ i inicijalizira sve loggere
+    (app.log, verbatim.log, llm_responses.log) unutar sesijskog direktorija.
+    """
+    from app.config_loader import load_global_config
+    config = load_global_config()
+    setup_logging(config)
+    logging.info("MambaBookVoice Web GUI pokrenut.")
 
 
 # ---------------------------------------------------------------------------
@@ -103,22 +97,64 @@ async def mp3_page():
 
 
 # ---------------------------------------------------------------------------
-# WebSocket — live console log stream
+# WebSocket — live console log stream (tail -f mehanizam)
 # ---------------------------------------------------------------------------
 @app.websocket("/stream-logs")
 async def stream_logs(websocket: WebSocket):
+    """Čita app.log iz aktivne sesije kao 'tail -f' i šalje svaku novu liniju."""
     await websocket.accept()
-    ws_log_handler.connections.append(websocket)
     try:
         await websocket.send_text("INFO Spojen na MambaBookVoice log stream.")
-        while True:
-            await asyncio.sleep(30)
-            await websocket.send_text("PING")
+
+        # Dinamički dohvati putanju iz aktivne sesije
+        session_dir = get_session_log_dir()
+        if session_dir is None:
+            await websocket.send_text("WARNING Log sesija još nije inicijalizirana, čekam...")
+            await asyncio.sleep(1)
+            session_dir = get_session_log_dir()
+
+        log_file = (session_dir / "app.log") if session_dir else (LOG_DIR / "app.log")
+        log_file.touch(exist_ok=True)
+
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            # Skoči na kraj datoteke — ne šalji stare logove
+            f.seek(0, 2)
+
+            while True:
+                # Provjeri dolazi li disconnect od klijenta (non-blocking)
+                try:
+                    _ = await asyncio.wait_for(
+                        websocket.receive_text(), timeout=0.1
+                    )
+                except asyncio.TimeoutError:
+                    pass  # Nema poruke od klijenta — normalno, nastavi tail
+                except WebSocketDisconnect:
+                    break
+
+                # Čitaj sve nove linije koje su stigle od zadnjeg čitanja
+                while True:
+                    linija = f.readline()
+                    if not linija:
+                        break
+                    linija = linija.strip()
+                    if linija:
+                        try:
+                            await websocket.send_text(linija)
+                        except Exception:
+                            return  # Klijent se odspojio
+
+                # Kratka pauza da ne opteretimo CPU
+                await asyncio.sleep(0.2)
+
     except WebSocketDisconnect:
         pass
+    except Exception as exc:
+        logging.warning("WebSocket /stream-logs greška: %s", exc)
     finally:
-        if websocket in ws_log_handler.connections:
-            ws_log_handler.connections.remove(websocket)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +374,83 @@ async def api_profili():
     return JSONResponse({"profili": profili})
 
 
+# Mapa: provider ključ → ime za prikaz
+_PROVIDER_LABELS = {
+    "lm_studio":    "LM Studio (Lokalno)",
+    "ollama_local": "Ollama Lokalno",
+    "ollama_cloud": "Ollama Cloud",
+    "openai":       "OpenAI (GPT-4o)",
+    "gemini":       "Gemini (2.0 Flash)",
+    "qwen":         "Qwen (DashScope)",
+}
+
+
+@app.get("/api/provider")
+async def api_get_provider():
+    """Vraća trenutno aktivni provider iz settings.yaml."""
+    try:
+        import yaml
+        with open(CONFIG_DIR / "settings.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        active = cfg.get("api", {}).get("provider", "lm_studio")
+        providers = list(_PROVIDER_LABELS.keys())
+        return JSONResponse({
+            "active": active,
+            "label": _PROVIDER_LABELS.get(active, active),
+            "providers": [{"id": k, "ime": v} for k, v in _PROVIDER_LABELS.items()]
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ProviderRequest(BaseModel):
+    provider: str
+
+
+@app.post("/api/provider")
+async def api_set_provider(req: ProviderRequest):
+    """Mijenja aktivni provider u settings.yaml i .env provjeri."""
+    if req.provider not in _PROVIDER_LABELS:
+        raise HTTPException(status_code=400, detail=f"Nepoznati provider: {req.provider}")
+    try:
+        import yaml
+        with open(CONFIG_DIR / "settings.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
+        cfg.setdefault("api", {})["provider"] = req.provider
+
+        # Provjeri je li ključ dostupan za novi provider
+        key_env = cfg.get("api", {}).get("providers", {}).get(req.provider, {}).get("key_env")
+        key_ok = True
+        key_poruka = ""
+        if key_env:
+            val = os.getenv(key_env, "")
+            if not val:
+                key_ok = False
+                key_poruka = f"Upozorenje: {key_env} nije postavljen u .env!"
+
+        # Spremi bez api_key vrijednosti
+        providers = cfg.get("api", {}).get("providers", {})
+        for p in providers.values():
+            p.pop("api_key", None)
+
+        tmp = str(CONFIG_DIR / "settings.yaml") + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        os.replace(tmp, str(CONFIG_DIR / "settings.yaml"))
+
+        logging.info(f"[PROVIDER] Promijenjen na: {req.provider} ({_PROVIDER_LABELS[req.provider]})")
+        return JSONResponse({
+            "status": "ok",
+            "provider": req.provider,
+            "label": _PROVIDER_LABELS[req.provider],
+            "key_ok": key_ok,
+            "poruka": key_poruka
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/opcije")
 async def api_opcije():
     """Vraća trenutne opcije prevođenja iz settings.yaml."""
@@ -401,7 +514,31 @@ async def api_prevedi(req: PrevodRequest):
         from app.translator import Translator
         import yaml
 
+        # load_dotenv ponovo da budemo sigurni da su ključevi dostupni
+        try:
+            from dotenv import load_dotenv as _ld
+            _ld(dotenv_path=ROOT / ".env", override=True)
+        except ImportError:
+            pass
+
         config = load_global_config()
+
+        # Provjeri API ključ za aktivni provider
+        active_provider = config.get("api", {}).get("provider", "lm_studio")
+        provider_cfg = config.get("api", {}).get("providers", {}).get(active_provider, {})
+        key_env = provider_cfg.get("key_env")
+        if key_env:
+            api_key = os.getenv(key_env, "")
+            if not api_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"API ključ nije pronađen! Provider '{active_provider}' zahtijeva "
+                        f"varijablu '{key_env}' u .env datoteci. "
+                        f"Otvori .env i dodaj: {key_env}=tvoj_kljuc"
+                    )
+                )
+
         fm = FileManager(config)
         cp = CheckpointManager(config, fm)
         translator = Translator(config, cp)

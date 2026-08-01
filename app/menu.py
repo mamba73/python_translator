@@ -1204,22 +1204,54 @@ class Menu:
         print()
 
         try:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location(
-                "web_server",
-                str(Path(__file__).resolve().parent.parent / "web_server.py")
-            )
-            if spec is None or spec.loader is None:
-                print("  Greška: web_server.py nije pronađen u korijenu projekta.")
+            import subprocess
+            import webbrowser
+            import time
+            import signal
+
+            # Eksplicitna putanja do Python interpretera u virtualnom okruženju
+            # — osigurava da su uvicorn[standard], websockets i ostale knjižnice dostupne
+            root = Path(__file__).resolve().parent.parent
+            env_python = root / "knjige_env" / "Scripts" / "python.exe"
+
+            if not env_python.exists():
+                print(f"  Greška: Python interpreter nije pronađen: {env_python}")
+                print("  Pokrenite server ručno: uvicorn web_server:app --host 127.0.0.1 --port 8000")
                 self._safe_input("Pritisnite Enter za povratak...")
                 return
 
-            web_server = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(web_server)  # type: ignore[union-attr]
-            web_server.pokreni_server()
+            cmd = [
+                str(env_python),
+                "-m", "uvicorn",
+                "web_server:app",
+                "--host", "127.0.0.1",
+                "--port", "8000",
+                "--log-level", "info",
+            ]
 
-        except KeyboardInterrupt:
-            print("\n  Web server zaustavljen.")
+            print(f"  Interpreter: {env_python}")
+            print(f"  Pokretanje: uvicorn web_server:app --host 127.0.0.1 --port 8000\n")
+
+            # Pokreni kao subprocess — blokira dok korisnik ne pritisne Ctrl+C
+            process = subprocess.Popen(cmd, cwd=str(root))
+
+            # Otvori browser nakon 2 sekunde
+            time.sleep(2.0)
+            webbrowser.open("http://127.0.0.1:8000")
+
+            print("  Server pokrenut. Pritisnite Ctrl+C za zaustavljanje...\n")
+
+            try:
+                process.wait()  # Čekaj dok korisnik ne zaustavi server
+            except KeyboardInterrupt:
+                print("\n  Zaustavljam server...")
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                print("  Web server zaustavljen.")
+
         except Exception as e:
             print(f"  Greška pri pokretanju web servera: {e}")
             logging.error(f"Web server greška: {e}")

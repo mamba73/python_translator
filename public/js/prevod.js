@@ -1,6 +1,7 @@
 /**
  * prevod.js — Logika za Korak 3: LLM Prijevod
  * Slajder, Toggle, Dropdown — sve promjene šalju POST na /api/opcije
+ * Provider Dropdown šalje POST na /api/provider
  */
 
 (function () {
@@ -45,6 +46,46 @@
       });
     } catch (err) {
       // Ignoriraj
+    }
+  }
+
+  async function ucitajAktivniProvider() {
+    const select = document.getElementById('provider-select');
+    if (!select) return;
+    try {
+      const res = await fetch('/api/provider');
+      const data = await res.json();
+      select.value = data.active || 'lm_studio';
+    } catch (err) {
+      // Ignoriraj — ostaje default iz HTML-a
+    }
+  }
+
+  async function promijeniProvider(providerKey) {
+    const warnEl = document.getElementById('provider-warn');
+    try {
+      const res = await fetch('/api/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: providerKey })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast('Greška: ' + (data.detail || 'Nepoznata greška'), 'error');
+        return;
+      }
+      if (!data.key_ok && data.poruka) {
+        if (warnEl) {
+          warnEl.textContent = '⚠ ' + data.poruka;
+          warnEl.classList.remove('hidden');
+        }
+        showToast(data.poruka, 'warn');
+      } else {
+        if (warnEl) warnEl.classList.add('hidden');
+        showToast(`Provider: ${data.label}`, 'info');
+      }
+    } catch (e) {
+      showToast('Greška pri promjeni providera: ' + e.message, 'error');
     }
   }
 
@@ -103,6 +144,12 @@
     await ucitajProfile();
     await ucitajFixedDatoteke();
     await ucitajOpcije();
+    await ucitajAktivniProvider();
+
+    // Provider dropdown
+    document.getElementById('provider-select')?.addEventListener('change', function () {
+      promijeniProvider(this.value);
+    });
 
     // Slajder
     const slider = document.getElementById('kolicina-slider');
@@ -160,7 +207,7 @@
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
         throw new Error(err.detail || 'Greška servera');
       }
 
@@ -169,7 +216,10 @@
     } catch (e) {
       showToast('Greška: ' + e.message, 'error');
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = tip === 'test' ? 'Pokreni TEST' : 'Produkcijski prijevod'; }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = tip === 'test' ? '🧪 Pokreni TEST' : '🚀 Produkcijski prijevod';
+      }
     }
   }
 

@@ -232,10 +232,10 @@ def _inject_api_keys(cfg: dict[str, Any]) -> dict[str, Any]:
         value = os.getenv(key_env, "")
         provider_cfg["api_key"] = value
 
-        # Upozori samo za aktivni provider koji zahtijeva ključ
+        # Upozori samo za aktivni provider koji zahtijeva ključ (ne baci grešku — server mora raditi)
         if provider_name == active_provider and not value:
-            raise ValueError(
-                f"Greška: Varijabla [{key_env}] nije postavljena u .env datoteci! "
+            logging.warning(
+                f"Upozorenje: Varijabla [{key_env}] nije postavljena u .env datoteci! "
                 f"Provider '{provider_name}' zahtijeva API ključ."
             )
 

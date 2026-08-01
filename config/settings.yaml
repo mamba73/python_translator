@@ -11,7 +11,7 @@ directories:
   logs: ./work/logs
   config: ./config
 api:
-  provider: qwen
+  provider: lm_studio
   auto_detect_model: true
   auto_detect_timeout: 5
   timeout: 120
@@ -47,7 +47,7 @@ api:
       key_env: CUSTOM_API_KEY
 translation:
   default_system_prompt: Ti si stručni prevoditelj s engleskog na hrvatski. Prevedi
-    dani tekst točno i prirodno.
+    ovaj tekst točno i prirodno.
   temperature: 0.25
   max_tokens: 4000
   top_p: 0.8
@@ -62,7 +62,7 @@ translation:
   header_footer_threshold: 0.4
   test_header: true
   granularity: paragraph
-  default_count: 1
+  default_count: 5
 sort_mode: date_desc
 text_cleaning:
   content_start_markers:
@@ -74,8 +74,8 @@ text_cleaning:
   - (?i)preface
   - (?i)introduction
 logging:
-  verbatim: false
-  llm_responses: false
+  verbatim: true
+  llm_responses: true
   enable_reasoning: false
 tts:
   engine: edge-tts

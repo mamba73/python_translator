@@ -508,9 +508,22 @@ class Translator:
         # Gemini response format je drugačiji
         try:
             data = json.loads(response)
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+            result = data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, json.JSONDecodeError):
-            return response
+            result = response
+
+        # Logiraj Gemini LLM razgovor
+        user_msg = ""
+        for msg in messages:
+            if msg.get("role") == "user":
+                user_msg = msg.get("content", "")
+                break
+        log_llm_response(user_msg, result, {
+            "provider": self._provider,
+            "url": url,
+            "model": payload.get("model", ""),
+        })
+        return result
 
     def _call_qwen(self, messages: list[dict[str, str]]) -> str:
         """Adapter za Qwen (Alibaba)."""
@@ -562,6 +575,13 @@ class Translator:
         """
         if headers is None:
             headers = {"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"}
+
+        # Verbatim upis cjelovitog payloada prije slanja
+        try:
+            payload_str = json.dumps(payload, ensure_ascii=False, indent=2)
+            log_verbatim(payload_str, f"HTTP REQUEST → {url}")
+        except Exception:
+            pass
 
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
 
