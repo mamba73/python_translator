@@ -688,11 +688,20 @@ async def api_translated_datoteke():
 class TTSRequest(BaseModel):
     rel_path: str
     nacin: str = "zasebne"  # "zasebne" | "jedna"
+    nastavi: bool = False  # True = resume u postojećoj mapi
 
 
 @app.post("/api/generiraj-mp3")
 async def api_generiraj_mp3(req: TTSRequest):
-    """Pokreće TTS sintezu. Automatski duplicira audiobook mapu ako već postoji."""
+    """Pokreće TTS sintezu s real-time progressom i resume podrškom.
+
+    Ako je req.nastavi=True, traži postojeću audiobook mapu i nastavlja
+    generiranje od mjesta gdje je stalo (preskače već generirane MP3).
+    Inače, automatski duplicira audiobook mapu ako već postoji (_001, _002...).
+
+    TTS se izvršava u zasebnoj dretvi (asyncio.to_thread) kako bi event loop
+    ostao slobodan za WebSocket streaming progress linija u real-time.
+    """
     try:
         from app.config_loader import load_global_config
         from app.file_manager import FileManager
@@ -717,24 +726,60 @@ async def api_generiraj_mp3(req: TTSRequest):
             with open(config_p, 'r', encoding='utf-8', errors='replace') as f:
                 book_config = yaml.safe_load(f)
 
-        # Autodupliciranje: ako mapa postoji, kreira _001, _002 itd.
-        audiobook_dir = fm.ensure_dir(
-            fm.audiobook_dir(knjiga_dir.name, book_config.get("author", "Unknown") if book_config else "Unknown"),
-            suffix_if_exists=True,
-        )
+        author = book_config.get("author", "Unknown") if book_config else "Unknown"
+        base_audiobook_dir = fm.audiobook_dir(knjiga_dir.name, author)
+
+        # Resume: koristi postojeću mapu bez sufiksiranja
+        if req.nastavi:
+            if not base_audiobook_dir.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail="Ne postoji audiobook mapa za nastavak. Pokrenite novu sintezu."
+                )
+            audiobook_dir = base_audiobook_dir
+            audiobook_dir.mkdir(parents=True, exist_ok=True)
+            logging.info(f"[TTS] Nastavak u postojećoj mapi: {audiobook_dir.name}")
+        else:
+            # Autodupliciranje: ako mapa postoji, kreira _001, _002 itd.
+            audiobook_dir = fm.ensure_dir(
+                base_audiobook_dir,
+                suffix_if_exists=True,
+            )
 
         logging.info(f"[TTS] Počinje: {putanja.name} → {audiobook_dir.name}")
-        # generiraj_audiobook je async — mora se await-ovati, inače se
-        # korutina nikada ne izvrši i nastaju samo prazne mape bez MP3.
-        await tts.generiraj_audiobook(
-            tekst=tekst,
-            book_title=knjiga_dir.name,
-            book_config=book_config or {},
-            output_dir=audiobook_dir,
-            merge_single=(req.nacin == "jedna")
-        )
-        logging.info(f"[TTS] Završeno: {audiobook_dir}")
-        return JSONResponse({"status": "ok", "izlaz": str(audiobook_dir.name)})
+
+        # Pokreni TTS u zasebnoj dretvi — event loop ostaje slobodan
+        # za WebSocket streaming progress linija u real-time.
+        # edge-tts je async, ali ga pokrećemo u zasebnom event loopu
+        # unutar dretve kako ne bi blokirao glavni event loop.
+        def _radi_tts():
+            # Kreiraj novi event loop za ovu dretvu
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(
+                    tts.generiraj_audiobook(
+                        tekst=tekst,
+                        book_title=knjiga_dir.name,
+                        book_config=book_config or {},
+                        output_dir=audiobook_dir,
+                        merge_single=(req.nacin == "jedna"),
+                        resume_from=0,  # automatska detekcija iz postojećih MP3
+                    )
+                )
+            finally:
+                loop.close()
+
+        await asyncio.to_thread(_radi_tts)
+
+        # Broj generiranih MP3 datoteka
+        mp3_count = len(list(audiobook_dir.glob("*.mp3")))
+        logging.info(f"[TTS] Završeno: {audiobook_dir} ({mp3_count} MP3)")
+        return JSONResponse({
+            "status": "ok",
+            "izlaz": str(audiobook_dir.name),
+            "mp3_count": mp3_count
+        })
 
     except HTTPException:
         raise

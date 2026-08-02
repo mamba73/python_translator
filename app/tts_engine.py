@@ -207,8 +207,14 @@ class TTSEngine:
 
     async def generiraj_audiobook(self, tekst: str, output_dir: Path,
                                   book_title: str, book_config: dict[str, Any] | None = None,
-                                  merge_single: bool = False) -> list[Path]:
-        """Orkestracija: segmenti → MP3 → ID3.
+                                  merge_single: bool = False,
+                                  resume_from: int = 0) -> list[Path]:
+        """Orkestracija: segmenti → MP3 → ID3 s resume podrškom.
+
+        Resume logika (ekvivalent prijevodu): ako output_dir već sadrži MP3
+        datoteke, nastavlja od mjesta gdje je stalo — preskače već generirane
+        segmente i dodaje samo nove. Broj postojećih MP3 datoteka određuje
+        resume_from indeks.
 
         Args:
             tekst: Cijeli tekst knjige.
@@ -216,6 +222,8 @@ class TTSEngine:
             book_title: Naslov knjige.
             book_config: Per-book konfiguracija (za author i TTS postavke).
             merge_single: Ako True, spaja sve segmente u jednu MP3 datoteku.
+            resume_from: Indeks segmenta od kojeg se nastavlja (0 = od početka).
+                Ako je 0, automatski se detektira iz postojećih MP3 datoteka.
 
         Returns:
             Lista putanja do generiranih MP3 datoteka.
@@ -242,12 +250,31 @@ class TTSEngine:
             ukupno_segmenata += len(segmenti)
         logging.info(f"[TTS] Ukupno segmenata za sintezu: {ukupno_segmenata}")
 
+        # Resume logika: detektiraj postojeće MP3 datoteke u output_dir
+        # i nastavi od mjesta gdje je stalo (ekvivalent prijevodu).
+        postojece_mp3 = sorted(output_dir.glob("*.mp3")) if output_dir.exists() else []
+        if resume_from <= 0 and postojece_mp3:
+            resume_from = len(postojece_mp3)
+            postotak_resume = int(resume_from / ukupno_segmenata * 100) if ukupno_segmenata > 0 else 0
+            logging.info(
+                f"[TTS RESUME] Nastavljam od segmenta {resume_from}/{ukupno_segmenata} "
+                f"(prethodno generirano {postotak_resume}%)."
+            )
+        elif resume_from > 0:
+            logging.info(f"[TTS RESUME] Nastavljam od segmenta {resume_from}/{ukupno_segmenata}")
+
         global_counter = 1
         obradeno = 0
-        sve_mp3_putanje = []
+        sve_mp3_putanje = list(postojece_mp3)  # Učitaj postojeće u listu
 
         for ch_idx, segmenti in sva_poglavlja_segmenti:
             for part_idx, segment in enumerate(segmenti, 1):
+                # Preskoči već generirane segmente pri resume-u
+                if obradeno < resume_from:
+                    obradeno += 1
+                    global_counter += 1
+                    continue
+
                 # Imenovanje: NNN_ChXX_partXXX.mp3
                 filename = f"{global_counter:03d}_Ch{ch_idx:02d}_part{part_idx:03d}.mp3"
                 mp3_path = output_dir / filename

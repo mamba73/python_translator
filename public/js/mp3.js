@@ -2,6 +2,7 @@
  * mp3.js — Logika za Korak 4: TTS sinteza u MP3
  * Autodupliciranje audiobook mape ako već postoji
  * Modal s progress barom i ETA za real-time praćenje TTS sinteze
+ * Resume funkcionalnost — nastavak prekinute TTS sinteze
  */
 
 (function () {
@@ -14,12 +15,14 @@
   let modalWs = null;
   let modalReconnectTimer = null;
 
-  function otvoriModal() {
+  function otvoriModal(nastavak = false) {
     const modal = document.getElementById('tts-modal');
     if (!modal) return;
 
     // Resetiraj modal
-    document.getElementById('tts-modal-naslov').textContent = '🎧 TTS sinteza u tijeku...';
+    document.getElementById('tts-modal-naslov').textContent = nastavak
+      ? '⏯ Nastavak TTS sinteze...'
+      : '🎧 TTS sinteza u tijeku...';
     document.getElementById('tts-modal-status').textContent = 'Priprema segmenata...';
     document.getElementById('tts-modal-progress-tekst').textContent = '0%';
     document.getElementById('tts-modal-progress-detalji').textContent = 'Segment 0/0';
@@ -135,6 +138,15 @@
       }
     }
 
+    // TTS resume poruka
+    if (linija.includes('[TTS RESUME]')) {
+      document.getElementById('tts-modal-status').textContent = 'Nastavljam prekinutu sintezu...';
+      const match = linija.match(/Nastavljam od segmenta (\d+)\/(\d+)/);
+      if (match) {
+        document.getElementById('tts-modal-progress-detalji').textContent = `Segment ${match[1]}/${match[2]}`;
+      }
+    }
+
     // Završetak TTS sinteze
     if (linija.includes('[TTS] Završeno')) {
       const folderMatch = linija.match(/Završeno:\s*(.+)$/);
@@ -197,13 +209,14 @@
         // Klik na redak aktivira radio
         tr.addEventListener('click', () => {
           const rb = tr.querySelector('.row-rb');
-          if (rb) { rb.checked = true; odabraniIdx = i; }
+          if (rb) { rb.checked = true; odabraniIdx = i; provjeriAudiobookMapu(); }
         });
       });
 
       document.querySelectorAll('.row-rb').forEach(rb => {
         rb.addEventListener('change', e => {
           odabraniIdx = parseInt(e.target.dataset.idx);
+          provjeriAudiobookMapu();
         });
       });
 
@@ -213,67 +226,103 @@
     }
   }
 
+  /**
+   * Provjerava postoji li audiobook mapa za odabranu datoteku.
+   * Ako postoji, prikazuje "Nastavi TTS" gumb.
+   */
+  async function provjeriAudiobookMapu() {
+    const btnNastavi = document.getElementById('btn-nastavi-mp3');
+    if (!btnNastavi || odabraniIdx === null) {
+      if (btnNastavi) btnNastavi.classList.add('hidden');
+      return;
+    }
+
+    // Audiobook mapa se zove <knjiga>---<autor> u work/audiobooks/
+    // Frontend ne zna točnu putanju, ali možemo provjeriti preko API-ja
+    // ako postoji endpoint. Za sada, gumb je uvijek vidljiv ako je datoteka
+    // odabrana — backend će vratiti 404 ako mapa ne postoji.
+    btnNastavi.classList.remove('hidden');
+  }
+
+  /**
+   * Pokreće TTS sintezu — novu ili nastavak.
+   * @param {boolean} nastavak - True za resume, False za novu sintezu
+   */
+  async function pokreniTTS(nastavak = false) {
+    if (odabraniIdx === null) {
+      showToast('Odaberite datoteku za TTS sintezu.', 'warn');
+      return;
+    }
+
+    const nacin = document.querySelector('input[name="nacin"]:checked')?.value || 'zasebne';
+    const d = datoteke[odabraniIdx];
+
+    const btn = document.getElementById('btn-generiraj-mp3');
+    const btnNastavi = document.getElementById('btn-nastavi-mp3');
+    btn.disabled = true;
+    btn.textContent = 'TTS sinteza u tijeku...';
+    if (btnNastavi) btnNastavi.disabled = true;
+
+    // Progress indikator (stari spinner — ostaje za kompatibilnost)
+    const progressEl = document.getElementById('tts-progress');
+    if (progressEl) progressEl.classList.remove('hidden');
+
+    // Otvori modal s progress barom
+    otvoriModal(nastavak);
+
+    try {
+      const res = await fetch('/api/generiraj-mp3', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rel_path: d.rel_path, nacin, nastavi: nastavak })
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Greška servera');
+      }
+
+      const data = await res.json();
+      const poruka = nastavak
+        ? `TTS nastavak završen: ${data.izlaz} (${data.mp3_count} MP3)`
+        : `TTS završen: ${data.izlaz} (${data.mp3_count} MP3)`;
+      showToast(poruka, 'info');
+
+      // Ako modal već nije prikazao rezultat (npr. WebSocket linije su propuštene),
+      // osvježi ime foldera iz API odgovora
+      const folderEl = document.getElementById('tts-modal-ime-foldera');
+      if (folderEl && !folderEl.textContent) {
+        folderEl.textContent = data.izlaz;
+      }
+      const rezEl = document.getElementById('tts-modal-rezultat');
+      if (rezEl && rezEl.classList.contains('hidden')) {
+        rezEl.classList.remove('hidden');
+        document.getElementById('tts-modal-naslov').textContent = '✅ TTS sinteza završena';
+        document.getElementById('tts-modal-status').textContent = 'Završeno!';
+        document.getElementById('tts-modal-progress-tekst').textContent = '100%';
+        document.getElementById('tts-modal-progress-bar').style.width = '100%';
+        const brojEl = document.getElementById('tts-modal-broj-mp3');
+        if (brojEl) brojEl.textContent = `Ukupno generirano: ${data.mp3_count} MP3 datoteka`;
+      }
+    } catch (e) {
+      document.getElementById('tts-modal-status').textContent = 'Greška: ' + e.message;
+      showToast('Greška: ' + e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Generiraj MP3 audiobook';
+      if (btnNastavi) btnNastavi.disabled = false;
+      if (progressEl) progressEl.classList.add('hidden');
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     ucitajDatoteke();
 
-    document.getElementById('btn-generiraj-mp3')?.addEventListener('click', async () => {
-      if (odabraniIdx === null) {
-        showToast('Odaberite datoteku za TTS sintezu.', 'warn');
-        return;
-      }
+    // Gumb za novu TTS sintezu
+    document.getElementById('btn-generiraj-mp3')?.addEventListener('click', () => pokreniTTS(false));
 
-      const nacin = document.querySelector('input[name="nacin"]:checked')?.value || 'zasebne';
-      const d = datoteke[odabraniIdx];
-
-      const btn = document.getElementById('btn-generiraj-mp3');
-      btn.disabled = true;
-      btn.textContent = 'TTS sinteza u tijeku...';
-
-      // Progress indikator (stari spinner — ostaje za kompatibilnost)
-      const progressEl = document.getElementById('tts-progress');
-      if (progressEl) progressEl.classList.remove('hidden');
-
-      // Otvori modal s progress barom
-      otvoriModal();
-
-      try {
-        const res = await fetch('/api/generiraj-mp3', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rel_path: d.rel_path, nacin })
-        });
-
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.detail || 'Greška servera');
-        }
-
-        const data = await res.json();
-        showToast(`TTS završen: ${data.izlaz}`, 'info');
-
-        // Ako modal već nije prikazao rezultat (npr. WebSocket linije su propuštene),
-        // osvježi ime foldera iz API odgovora
-        const folderEl = document.getElementById('tts-modal-ime-foldera');
-        if (folderEl && !folderEl.textContent) {
-          folderEl.textContent = data.izlaz;
-        }
-        const rezEl = document.getElementById('tts-modal-rezultat');
-        if (rezEl && rezEl.classList.contains('hidden')) {
-          rezEl.classList.remove('hidden');
-          document.getElementById('tts-modal-naslov').textContent = '✅ TTS sinteza završena';
-          document.getElementById('tts-modal-status').textContent = 'Završeno!';
-          document.getElementById('tts-modal-progress-tekst').textContent = '100%';
-          document.getElementById('tts-modal-progress-bar').style.width = '100%';
-        }
-      } catch (e) {
-        document.getElementById('tts-modal-status').textContent = 'Greška: ' + e.message;
-        showToast('Greška: ' + e.message, 'error');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Generiraj MP3 audiobook';
-        if (progressEl) progressEl.classList.add('hidden');
-      }
-    });
+    // Gumb za nastavak TTS sinteze (resume)
+    document.getElementById('btn-nastavi-mp3')?.addEventListener('click', () => pokreniTTS(true));
 
     // Modal event listeners
     document.getElementById('tts-modal-zatvori')?.addEventListener('click', zatvoriModal);
