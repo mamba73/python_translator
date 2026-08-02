@@ -262,6 +262,134 @@ class DocumentProcessor:
         return kompletan_tekst, detektirani_elementi, reader.pages
 
 
+    def chunkiraj_tekst(self, tekst: str) -> list[str]:
+        """Pametno grupira odlomke u chunkove između min_chars i max_chars.
+
+        Granice (min_chars, max_chars) čitaju se iz konfiguracije
+        (config.get("chunking", {})). Ako pojedini odlomak prelazi max_chars,
+        dijeli se sigurno po rečenicama (`. `, `! `, `? `, `\n`), nikada po riječima.
+
+        Args:
+            tekst: Cijeli tekst knjige (odlomci odvojeni s '\n\n').
+
+        Returns:
+            Lista chunkova (stringova) spremnih za prevođenje.
+        """
+        chunking_cfg = self._cfg.get("chunking", {})
+        min_chars = chunking_cfg.get("min_chars", 2500)
+        max_chars = chunking_cfg.get("max_chars", 4000)
+
+        # Odlomci = blokovi odvojeni praznim retkom
+        odlomci = [p.strip() for p in tekst.split('\n\n') if p.strip()]
+
+        chunkovi: list[str] = []
+        trenutni_chunk: list[str] = []
+        trenutna_duljina = 0
+
+        for odlomak in odlomci:
+            duljina_odlomka = len(odlomak)
+
+            # Ako odlomak sam prelazi max_chars, podijeli ga po rečenicama
+            if duljina_odlomka > max_chars:
+                # Prvo zatvori trenutni chunk ako ima sadržaja
+                if trenutni_chunk:
+                    chunkovi.append("\n\n".join(trenutni_chunk))
+                    trenutni_chunk = []
+                    trenutna_duljina = 0
+
+                # Podijeli veliki odlomak po rečenicama
+                dijelovi = self._podijeli_po_recenicama(odlomak, max_chars)
+                for dio in dijelovi:
+                    chunkovi.append(dio)
+                continue
+
+            # Ako dodavanje odlomka prelazi max_chars, zatvori trenutni chunk
+            if trenutni_chunk and (trenutna_duljina + duljina_odlomka + 2) > max_chars:
+                # Zatvori trenutni chunk samo ako je već dosegao min_chars
+                if trenutna_duljina >= min_chars:
+                    chunkovi.append("\n\n".join(trenutni_chunk))
+                    trenutni_chunk = []
+                    trenutna_duljina = 0
+                else:
+                    # Premali chunk - dodaj odlomak unatoč prekoračenju max_chars
+                    trenutni_chunk.append(odlomak)
+                    trenutna_duljina += duljina_odlomka + 2
+                    continue
+
+            trenutni_chunk.append(odlomak)
+            trenutna_duljina += duljina_odlomka + 2
+
+        # Zatvori zadnji chunk
+        if trenutni_chunk:
+            chunkovi.append("\n\n".join(trenutni_chunk))
+
+        # Logiraj rezultat chunkinga
+        for i, chunk in enumerate(chunkovi):
+            broj_odlomaka = len(chunk.split('\n\n'))
+            logging.info(
+                f"[CHUNKING] Grupirano {broj_odlomaka} odlomaka u chunk od {len(chunk)} znakova."
+            )
+
+        return chunkovi
+
+    def _podijeli_po_recenicama(self, tekst: str, max_chars: int) -> list[str]:
+        """Dijeli predugački odlomak po rečenicama na dijelove <= max_chars.
+
+        Rečenice se režu na granicama: `. `, `! `, `? `, `\n`.
+        Nikada se ne reže po riječima.
+
+        Args:
+            tekst: Odlomak koji prelazi max_chars.
+            max_chars: Maksimalna duljina chunka.
+
+        Returns:
+            Lista dijelova (chunkova) odlomka.
+        """
+        # Razdvoji na rečenice čuvajući graničnike
+        recenice = re.split(r'(?<=[.!?])\s+|\n+', tekst)
+        recenice = [r.strip() for r in recenice if r.strip()]
+
+        dijelovi: list[str] = []
+        trenutni_dio: list[str] = []
+        trenutna_duljina = 0
+
+        for recenica in recenice:
+            duljina_recenice = len(recenica)
+
+            # Ako i sama rečenica prelazi max_chars (rijetko), reži na zarezima
+            if duljina_recenice > max_chars:
+                if trenutni_dio:
+                    dijelovi.append(" ".join(trenutni_dio))
+                    trenutni_dio = []
+                    trenutna_duljina = 0
+                # Reži po zarezima kao zadnje sredstvo
+                poddijelovi = re.split(r'(?<=,)\s+', recenica)
+                trenutni_pod: list[str] = []
+                pod_duljina = 0
+                for pod in poddijelovi:
+                    if pod_duljina + len(pod) + 1 > max_chars and trenutni_pod:
+                        dijelovi.append(" ".join(trenutni_pod))
+                        trenutni_pod = []
+                        pod_duljina = 0
+                    trenutni_pod.append(pod)
+                    pod_duljina += len(pod) + 1
+                if trenutni_pod:
+                    dijelovi.append(" ".join(trenutni_pod))
+                continue
+
+            if trenutni_dio and (trenutna_duljina + duljina_recenice + 1) > max_chars:
+                dijelovi.append(" ".join(trenutni_dio))
+                trenutni_dio = []
+                trenutna_duljina = 0
+
+            trenutni_dio.append(recenica)
+            trenutna_duljina += duljina_recenice + 1
+
+        if trenutni_dio:
+            dijelovi.append(" ".join(trenutni_dio))
+
+        return dijelovi
+
     def segmentiraj_poglavlja(self, tekst: str) -> list[dict[str, str]]:
         """Razbija očišćeni tekst na poglavlja koristeći konfiguracijske uzorke.
 

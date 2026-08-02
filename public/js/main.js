@@ -45,12 +45,33 @@
     };
   }
 
+  // Zadnja progress linija u konzoli — za "refresh" umjesto gomilanja
+  let lastProgressLine = null;
+
   function appendLog(el, text, cls) {
-    const line = document.createElement('div');
-    line.className = cls || 'text-green-400';
-    const ts = new Date().toTimeString().slice(0, 8);
-    line.textContent = `[${ts}] ${text}`;
-    el.appendChild(line);
+    // Ako je progress linija, zamijeni prethodnu umjesto dodavanja nove
+    if (text.includes('[Progres]')) {
+      if (lastProgressLine && lastProgressLine.parentNode === el) {
+        const ts = new Date().toTimeString().slice(0, 8);
+        lastProgressLine.textContent = `[${ts}] ${text}`;
+        lastProgressLine.className = cls || 'text-green-400';
+        el.scrollTop = el.scrollHeight;
+        return;
+      }
+      const line = document.createElement('div');
+      line.className = cls || 'text-green-400';
+      const ts = new Date().toTimeString().slice(0, 8);
+      line.textContent = `[${ts}] ${text}`;
+      el.appendChild(line);
+      lastProgressLine = line;
+    } else {
+      // Normalna linija — dodaj novu
+      const line = document.createElement('div');
+      line.className = cls || 'text-green-400';
+      const ts = new Date().toTimeString().slice(0, 8);
+      line.textContent = `[${ts}] ${text}`;
+      el.appendChild(line);
+    }
 
     // Ograniči broj redova
     while (el.children.length > MAX_CONSOLE_LINES) {
@@ -65,6 +86,7 @@
     const upper = msg.toUpperCase();
     if (upper.startsWith('ERROR') || upper.includes('[ERROR]')) return 'text-red-400';
     if (upper.startsWith('WARNING') || upper.startsWith('WARN') || upper.includes('[WARN]')) return 'text-yellow-400';
+    if (upper.includes('[PROGRES]')) return 'text-blue-400';
     if (upper.startsWith('INFO') || upper.includes('[INFO]') || upper.includes('[KONVERZIJA]') ||
         upper.includes('[ČIŠĆENJE]') || upper.includes('[PRIJEVOD]') || upper.includes('[TTS]')) {
       return 'text-green-400';

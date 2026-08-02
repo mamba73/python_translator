@@ -1,17 +1,22 @@
 models:
-  - title: "LM Studio (Lokalno)"
+  - title: "LM Studio (Qwen3.6-27b-claude-opus-deepseek-distilled-imatrix-mtp)"
+    provider: "lmstudio"
+    model: "qwen3.6-27b-claude-opus-deepseek-distilled-imatrix-mtp"
+    apiBase: "http://127.0.0.1:1234"
+
+  - title: "LM Studio (localhost)"
     provider: "lmstudio"
     model: "local"
-    apiBase: "http://127.0.0"
+    apiBase: "http://localhost:1234/v1"
 
   - title: "Ollama Lokalno"
     provider: "ollama"
-    model: "llama3.2"
+    model: "local"
     apiBase: "http://127.0.0.1:11434"
 
   - title: "Ollama Cloud"
     provider: "ollama"
-    model: "llama3.2"
+    model: "local"
     apiBase: "https://ollama.ai"
     key_env: "OLLAMA_API_KEY"
 
@@ -30,14 +35,20 @@ models:
     model: "gemini-3-flash-preview"
     key_env: "GEMINI_API_KEY"
 
-  - title: "Qwen (DashScope)"
+  - title: "Qwen (DashScope Intl)"
+    provider: "openai"
+    model: "qwen-turbo"
+    apiBase: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    key_env: "QWEN_API_KEY"
+
+  - title: "Qwen (DashScope China)"
+    provider: "openai"
+    model: "qwen-turbo"
+    apiBase: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    key_env: "QWEN_API_KEY"
+
+  - title: "Qwen (DashScope A)"
     provider: "openai"
     model: "qwen-turbo"
     apiBase: "https://aliyuncs.com"
-    key_env: "QWEN_API_KEY"
-
-  - title: "Qwen (International API)"
-    provider: "openai"
-    model: "qwen3-coder-plus"
-    apiBase: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     key_env: "QWEN_API_KEY"

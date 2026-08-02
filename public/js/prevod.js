@@ -185,6 +185,140 @@
     document.getElementById('btn-produkcija')?.addEventListener('click', () => pokreniPrejevod('produkcija'));
   });
 
+  // ─── Modal: Progress prijevoda ────────────────────────────────────────────
+  let modalWs = null;
+  let modalReconnectTimer = null;
+  let modalImeDatoteke = null;
+
+  function otvoriModal(tip) {
+    const modal = document.getElementById('prevod-modal');
+    if (!modal) return;
+
+    // Resetiraj modal
+    document.getElementById('modal-naslov').textContent = tip === 'test' ? '🧪 TEST Prijevod' : '🚀 Produkcijski prijevod';
+    document.getElementById('modal-status').textContent = 'Priprema segmenata...';
+    document.getElementById('modal-progress-tekst').textContent = '0%';
+    document.getElementById('modal-progress-detalji').textContent = 'Segment 0/0';
+    document.getElementById('modal-progress-rijeci').textContent = '';
+    document.getElementById('modal-progress-bar').style.width = '0%';
+    document.getElementById('modal-rezultat').classList.add('hidden');
+    document.getElementById('modal-kopiraj').classList.add('hidden');
+    document.getElementById('modal-tekst').value = '';
+    modalImeDatoteke = null;
+
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+
+    // Spoji se na log stream za real-time progress
+    spojiModalWS();
+  }
+
+  function zatvoriModal() {
+    const modal = document.getElementById('prevod-modal');
+    if (modal) {
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+    if (modalWs) {
+      modalWs.close();
+      modalWs = null;
+    }
+    clearTimeout(modalReconnectTimer);
+  }
+
+  function spojiModalWS() {
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = `${protocol}://${location.host}/stream-logs`;
+
+    modalWs = new WebSocket(url);
+
+    modalWs.onmessage = (evt) => {
+      if (evt.data === 'PING') return;
+      obradiModalLog(evt.data);
+    };
+
+    modalWs.onclose = () => {
+      modalReconnectTimer = setTimeout(spojiModalWS, 3000);
+    };
+
+    modalWs.onerror = () => {
+      // Ignoriraj — reconnect će se dogoditi
+    };
+  }
+
+  function obradiModalLog(linija) {
+    // Progress linija: [Progres] : [██████] 33% | Segment 1/3 | riječi: 30/90 (33%)
+    if (linija.includes('[Progres]')) {
+      const postotakMatch = linija.match(/(\d+)%/);
+      const segmentMatch = linija.match(/Segment (\d+)\/(\d+)/);
+      const rijeciMatch = linija.match(/riječi: ([\d\/]+) \((\d+)%\)/);
+
+      if (postotakMatch) {
+        const pct = parseInt(postotakMatch[1]);
+        document.getElementById('modal-progress-tekst').textContent = pct + '%';
+        document.getElementById('modal-progress-bar').style.width = pct + '%';
+      }
+      if (segmentMatch) {
+        document.getElementById('modal-progress-detalji').textContent = `Segment ${segmentMatch[1]}/${segmentMatch[2]}`;
+      }
+      if (rijeciMatch) {
+        document.getElementById('modal-progress-rijeci').textContent = `riječi: ${rijeciMatch[1]} (${rijeciMatch[2]}%)`;
+      }
+const providerSelect = document.getElementById('provider-select');
+const modelName = providerSelect ? providerSelect.options[providerSelect.selectedIndex]?.text : '';
+if (modelName) {
+  document.getElementById('modal-status').textContent = `${modelName} - Prevođenje u tijeku...`;
+} else {
+  const providerSelect = document.getElementById('provider-select');
+const modelName = providerSelect ? providerSelect.options[providerSelect.selectedIndex]?.text : '';
+if (modelName) {
+  document.getElementById('modal-status').textContent = `${modelName} - Prevođenje u tijeku...`;
+} else {
+  const providerSelect = document.getElementById('provider-select');
+const modelName = providerSelect ? providerSelect.options[providerSelect.selectedIndex]?.text : '';
+if (modelName) {
+  document.getElementById('modal-status').textContent = `${modelName} - Prevođenje u tijeku...`;
+} else {
+  document.getElementById('modal-status').textContent = 'Prevođenje u tijeku...';
+}
+}
+}
+    }
+
+    // Završetak prijevoda
+    if (linija.includes('[PRIJEVOD] Završen')) {
+      const imeMatch = linija.match(/Završen (?:test|produkcijski): (.+?)(?:\s*\(status=.*\))?$/);
+      if (imeMatch) {
+        modalImeDatoteke = imeMatch[1].trim();
+      }
+      document.getElementById('modal-status').textContent = 'Završeno! Učitavam tekst...';
+      document.getElementById('modal-progress-tekst').textContent = '100%';
+      document.getElementById('modal-progress-bar').style.width = '100%';
+    }
+  }
+
+  async function prikaziRezultat(relPath) {
+    try {
+      const res = await fetch('/api/translated-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rel_path: relPath })
+      });
+      if (!res.ok) throw new Error('Ne mogu učitati tekst');
+      const data = await res.json();
+
+      document.getElementById('modal-tekst').value = data.sadrzaj;
+      document.getElementById('modal-ime-datoteke').textContent = data.ime;
+      document.getElementById('modal-rezultat').classList.remove('hidden');
+      document.getElementById('modal-kopiraj').classList.remove('hidden');
+      document.getElementById('modal-naslov').textContent = '✅ Prijevod završen';
+      document.getElementById('modal-status').textContent = 'Tekst je spreman za pregled.';
+    } catch (e) {
+      document.getElementById('modal-status').textContent = 'Greška pri učitavanju teksta.';
+      showToast('Greška pri učitavanju teksta: ' + e.message, 'error');
+    }
+  }
+
   async function pokreniPrejevod(tip) {
     const select = document.getElementById('fixed-select');
     const relPath = select?.value;
@@ -211,6 +345,9 @@
     const btn = document.getElementById(btnId);
     if (btn) { btn.disabled = true; btn.textContent = 'Prijevod u tijeku...'; }
 
+    // Otvori modal s progress barom
+    otvoriModal(tip);
+
     try {
       const res = await fetch('/api/prevedi', {
         method: 'POST',
@@ -224,8 +361,14 @@
       }
 
       const data = await res.json();
+
+      // Prikaži prevedeni tekst u modalu
+      const translatedRelPath = data.izlaz;
+      await prikaziRezultat(translatedRelPath);
+
       showToast(`Prijevod (${tip}) završen: ${data.izlaz}`, 'info');
     } catch (e) {
+      document.getElementById('modal-status').textContent = 'Greška: ' + e.message;
       showToast('Greška: ' + e.message, 'error');
     } finally {
       if (btn) {
@@ -234,5 +377,23 @@
       }
     }
   }
+
+  // ─── Modal event listeners ────────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('modal-zatvori')?.addEventListener('click', zatvoriModal);
+    document.getElementById('modal-zatvori-dno')?.addEventListener('click', zatvoriModal);
+    document.getElementById('modal-kopiraj')?.addEventListener('click', () => {
+      const tekst = document.getElementById('modal-tekst');
+      if (tekst) {
+        tekst.select();
+        navigator.clipboard.writeText(tekst.value).then(() => {
+          showToast('Tekst kopiran u međuspremnik.', 'info');
+        }).catch(() => {
+          document.execCommand('copy');
+          showToast('Tekst kopiran u međuspremnik.', 'info');
+        });
+      }
+    });
+  });
 
 })();

@@ -1193,7 +1193,12 @@ class Menu:
         return sorted(odabrani)
 
     def _pokreni_web_gui(self) -> None:
-        """Opcija [5] — Pokreće FastAPI web server i otvara preglednik."""
+        """Opcija [5] — Pokreće FastAPI web server i otvara preglednik.
+
+        Koristi unbuffered live stream (PYTHONUNBUFFERED=1) kako bi se
+        logovi iz podprocesa u realnom vremenu ispisivali u terminal
+        i gurali u app.log za WebSocket /stream-logs.
+        """
         ocisti_ekran()
         print("╔" + "═" * 64 + "╗")
         print("║  [5] POKRENI WEB GUI POSLUŽITELJ (FastAPI)" + " " * 23 + "║")
@@ -1208,6 +1213,7 @@ class Menu:
             import webbrowser
             import time
             import signal
+            import os
 
             # Eksplicitna putanja do Python interpretera u virtualnom okruženju
             # — osigurava da su uvicorn[standard], websockets i ostale knjižnice dostupne
@@ -1232,8 +1238,24 @@ class Menu:
             print(f"  Interpreter: {env_python}")
             print(f"  Pokretanje: uvicorn web_server:app --host 127.0.0.1 --port 8000\n")
 
-            # Pokreni kao subprocess — blokira dok korisnik ne pritisne Ctrl+C
-            process = subprocess.Popen(cmd, cwd=str(root))
+            # PYTHONUNBUFFERED=1 — otčepi stdout/stderr buffer u podprocesu
+            # PYTHONIOENCODING=utf-8 — prisili podproces na UTF-8 izlaz!
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"
+
+            # Pokreni kao subprocess s live streamom — blokira dok korisnik ne pritisne Ctrl+C
+            process = subprocess.Popen(
+                cmd,
+                cwd=str(root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+                bufsize=1,  # Line-buffered
+                # BEZ universal_newlines=True — čitamo sirove bajtove i
+                # dekodiramo ih eksplicitno u UTF-8 (errors='replace')
+                # kako se Windows charmap (CP1250/cp1252) nikada ne bi srušio.
+            )
 
             # Otvori browser nakon 2 sekunde
             time.sleep(2.0)
@@ -1242,7 +1264,40 @@ class Menu:
             print("  Server pokrenut. Pritisnite Ctrl+C za zaustavljanje...\n")
 
             try:
-                process.wait()  # Čekaj dok korisnik ne zaustavi server
+                # Asinkrona petlja — čita retke u realnom vremenu čim ih skripta ispljune
+                while True:
+                    linija = process.stdout.readline()
+                    if not linija and process.poll() is not None:
+                        break
+                    if linija:
+                        # Eksplicitno dekodiraj sirove bajtove u UTF-8 uz
+                        # errors='replace' — server se nikada ne smije srušiti
+                        # na nepoznatim bajtovima (npr. █ ili hrvatske kvačice).
+                        tekst_linije = linija.decode('utf-8', errors='replace').strip()
+                        if tekst_linije:
+                            print(tekst_linije)  # Izravan ispis u VS Code terminal uživo!
+
+                            # NE re-logaj INFO:root: linije — one su već zapisane u
+                            # app.log od strane podprocesa (root logger FileHandler).
+                            # Ponovno logiranje stvara duplikate:
+                            #   INFO:root:INFO:root:[PRIJEVOD] Počinje...
+                            # te spama terminal preko StreamHandler-a.
+                            if not tekst_linije.startswith("INFO:root:") and \
+                               not tekst_linije.startswith("WARNING:root:") and \
+                               not tekst_linije.startswith("ERROR:root:") and \
+                               not tekst_linije.startswith("DEBUG:root:"):
+                                # Nije log linija — direktno dodaj u app.log sesije
+                                # kako bi WebSocket /stream-logs dobio sve linije.
+                                try:
+                                    from app.logger import get_session_log_dir
+                                    sess = get_session_log_dir()
+                                    if sess is not None:
+                                        log_f = sess / "app.log"
+                                        with open(log_f, "a", encoding="utf-8") as lfh:
+                                            lfh.write(f"{tekst_linije}\n")
+                                            lfh.flush()
+                                except Exception:
+                                    pass
             except KeyboardInterrupt:
                 print("\n  Zaustavljam server...")
                 process.terminate()
@@ -1401,12 +1456,42 @@ class Menu:
         print(f"Checkpoint: {current_segment}/{total_segments} segmenata")
         print()
 
-        # Pronađi direktorij knjige i [fixed] datoteku
+        # Pronađi direktorij knjige i [fixed] datoteku.
+        # Prioritet: (1) ime izvora iz book_id (npr. "01-Foundation---Isaac-Asimov_web"
+        # -> "01-Foundation---Isaac-Asimov"), (2) book_title, (3) pretraga po output_dir.
         output_dir = Path(self._cfg["directories"]["output"])
-        knjiga_dir = output_dir / book_title
+        knjiga_dir = None
 
-        if not knjiga_dir.exists() or not knjiga_dir.is_dir():
-            print(f"Direktorij {knjiga_dir} ne postoji.")
+        # 1) Izdvoji izvorni naziv direktorija iz book_id (ukloni _web/_fixed sufiks)
+        source_name = book_id
+        for sufiks in ("_web", "_fixed"):
+            if book_id.endswith(sufiks):
+                source_name = book_id[: -len(sufiks)]
+                break
+        if source_name and source_name != book_id:
+            kandidat = output_dir / source_name
+            if kandidat.exists() and kandidat.is_dir():
+                knjiga_dir = kandidat
+
+        # 2) Fallback na book_title
+        if knjiga_dir is None and book_title:
+            kandidat = output_dir / book_title
+            if kandidat.exists() and kandidat.is_dir():
+                knjiga_dir = kandidat
+
+        # 3) Fallback: pretraži sve poddirektorije za onaj s [fixed]/izvornom datotekom
+        if knjiga_dir is None:
+            for kandidat in output_dir.iterdir():
+                if not kandidat.is_dir():
+                    continue
+                # Sadrži li memorija datoteku koja odgovara book_id?
+                memorije = list(kandidat.glob("*_memorija.json"))
+                if memorije:
+                    knjiga_dir = kandidat
+                    break
+
+        if knjiga_dir is None or not knjiga_dir.exists():
+            print(f"Direktorij knjige za checkpoint '{book_title}' nije pronađen u {output_dir}.")
             ack = self._safe_input("Pritisnite Enter za povratak...")
             return
 

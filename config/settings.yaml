@@ -36,7 +36,7 @@ translation:
   header_footer_threshold: 0.4
   test_header: true
   granularity: paragraph
-  default_count: 3
+  default_count: 6
 sort_mode: date_desc
 text_cleaning:
   content_start_markers:

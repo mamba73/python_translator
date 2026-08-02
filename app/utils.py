@@ -57,16 +57,20 @@ def prikazi_progres(
 
     dio_procenta = f"{int(procent * 100)}%"
     if dodatno:
-        sys.stdout.write(
-            f"\r[Progres] : [{bar}] {dio_procenta} | {tekst_statusa} | {dodatno}"
-        )
+        linija = f"[Progres] : [{bar}] {dio_procenta} | {tekst_statusa} | {dodatno}"
     else:
-        sys.stdout.write(
-            f"\r[Progres] : [{bar}] {dio_procenta} | {tekst_statusa}"
-        )
-    sys.stdout.flush()
-    if trenutno == ukupno:
-        sys.stdout.write("\n")
+        linija = f"[Progres] : [{bar}] {dio_procenta} | {tekst_statusa}"
+
+    # UVIJEK logiraj progress liniju u app.log (FlushFileHandler flusha odmah)
+    # kako bi WebSocket u web_server.py mogao streamati ažuriranja u stvarnom
+    # vremenu na frontend. U CLI modu logging StreamHandler ispisuje istu
+    # liniju na stdout — progress bar tako radi u oba okruženja.
+    #
+    # NAPOMENA: Ne koristimo sys.stdout.write() s \r jer u FastAPI async
+    # kontekstu (uvicorn) stdout output nije pouzdano flushan — pojavljuje
+    # se tek nakon što se cijeli prijevod završi.
+    import logging
+    logging.info(linija)
 
 
 def ocisti_ekran() -> None:

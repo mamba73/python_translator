@@ -508,7 +508,12 @@ class PrevodRequest(BaseModel):
 
 @app.post("/api/prevedi")
 async def api_prevedi(req: PrevodRequest):
-    """Pokreće prijevod (TEST ili produkcijski)."""
+    """Pokreće prijevod (TEST ili produkcijski).
+
+    Prijevod se pokreće u zasebnoj dretvi (asyncio.to_thread) kako bi
+    event loop ostao slobodan — WebSocket može streamati progress linije
+    u real-time dok se prijevod izvršava.
+    """
     try:
         from app.config_loader import load_global_config
         from app.file_manager import FileManager
@@ -567,29 +572,61 @@ async def api_prevedi(req: PrevodRequest):
         config_p = knjiga_dir / "config.yaml"
         book_config = None
         if config_p.exists():
-            with open(config_p, 'r') as f:
+            with open(config_p, 'r', encoding='utf-8', errors='replace') as f:
                 book_config = yaml.safe_load(f)
 
         translator.postavi_knjigu(str(knjiga_dir), book_config)
         logging.info(f"[PRIJEVOD] Počinje {req.tip}: {putanja.name}")
 
+        # Pokreni prijevod u zasebnoj dretvi — event loop ostaje slobodan
+        # za WebSocket streaming progress linija u real-time.
         if req.tip == "test":
-            prijevod = translator.prevedi_test(tekst, granularnost=req.granularnost, kolicina=req.kolicina, header=req.header)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            naziv = f"{putanja.stem}_test_{timestamp}.txt"
-            translated_book_dir = fm.ensure_dir(fm.book_output_dir(knjiga_dir.name, book_config.get("author", "Unknown") if book_config else "Unknown"), suffix_if_exists=False)
-            izlaz = fm.ensure_file_path(translated_book_dir / naziv, suffix_if_exists=True)
-            with open(izlaz, 'w', encoding='utf-8') as f:
-                f.write(prijevod)
-            logging.info(f"[PRIJEVOD] Završen test: {izlaz.name}")
-            return JSONResponse({"status": "ok", "izlaz": str(izlaz.name), "tip": "test"})
+            def _radi_test():
+                prijevod = translator.prevedi_test(
+                    tekst, granularnost=req.granularnost,
+                    kolicina=req.kolicina, header=req.header
+                )
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                naziv = f"{putanja.stem}_test_{timestamp}.txt"
+                translated_book_dir = fm.ensure_dir(
+                    fm.book_output_dir(
+                        knjiga_dir.name,
+                        book_config.get("author", "Unknown") if book_config else "Unknown"
+                    ),
+                    suffix_if_exists=False
+                )
+                izlaz = fm.ensure_file_path(translated_book_dir / naziv, suffix_if_exists=True)
+                with open(izlaz, 'w', encoding='utf-8') as f:
+                    f.write(prijevod)
+                logging.info(f"[PRIJEVOD] Završen test: {izlaz.name}")
+                return str(izlaz.relative_to(TRANSLATED_DIR)).replace("\\", "/")
+
+            rel_izlaz = await asyncio.to_thread(_radi_test)
+            return JSONResponse({"status": "ok", "izlaz": rel_izlaz, "tip": "test"})
         else:
-            translated_book_dir = fm.ensure_dir(fm.book_output_dir(knjiga_dir.name, book_config.get("author", "Unknown") if book_config else "Unknown"), suffix_if_exists=False)
-            izlaz = fm.ensure_file_path(translated_book_dir / f"{knjiga_dir.name}.txt", suffix_if_exists=True)
-            prijevod, je_prekinuto = translator.prevedi_knjigu(tekst, output_path=str(izlaz), book_id=f"{knjiga_dir.name}_web", granularnost=req.granularnost)
-            status = "prekinuto" if je_prekinuto else "ok"
-            logging.info(f"[PRIJEVOD] Završen produkcijski: {izlaz.name} (status={status})")
-            return JSONResponse({"status": status, "izlaz": str(izlaz.name), "tip": "produkcija"})
+            def _radi_produkcija():
+                translated_book_dir = fm.ensure_dir(
+                    fm.book_output_dir(
+                        knjiga_dir.name,
+                        book_config.get("author", "Unknown") if book_config else "Unknown"
+                    ),
+                    suffix_if_exists=False
+                )
+                izlaz = fm.ensure_file_path(
+                    translated_book_dir / f"{knjiga_dir.name}.txt",
+                    suffix_if_exists=True
+                )
+                prijevod, je_prekinuto = translator.prevedi_knjigu(
+                    tekst, output_path=str(izlaz),
+                    book_id=f"{knjiga_dir.name}_web",
+                    granularnost=req.granularnost
+                )
+                status = "prekinuto" if je_prekinuto else "ok"
+                logging.info(f"[PRIJEVOD] Završen produkcijski: {izlaz.name} (status={status})")
+                return str(izlaz.relative_to(TRANSLATED_DIR)).replace("\\", "/"), status
+
+            rel_izlaz, status = await asyncio.to_thread(_radi_produkcija)
+            return JSONResponse({"status": status, "izlaz": rel_izlaz, "tip": "produkcija"})
 
     except HTTPException:
         raise
@@ -601,6 +638,26 @@ async def api_prevedi(req: PrevodRequest):
 # ---------------------------------------------------------------------------
 # API — TTS / MP3 (Korak 4)
 # ---------------------------------------------------------------------------
+class TranslatedContentRequest(BaseModel):
+    rel_path: str
+
+
+@app.post("/api/translated-content")
+async def api_translated_content(req: TranslatedContentRequest):
+    """Vraća sadržaj prevedene datoteke za prikaz u modalu."""
+    try:
+        putanja = TRANSLATED_DIR / req.rel_path
+        if not putanja.exists():
+            raise HTTPException(status_code=404, detail="Datoteka ne postoji")
+        with open(putanja, 'r', encoding='utf-8') as f:
+            sadrzaj = f.read()
+        return JSONResponse({"sadrzaj": sadrzaj, "ime": putanja.name})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/translated-datoteke")
 async def api_translated_datoteke():
     """Lista prevedenih .txt datoteka iz work/translated/."""
@@ -657,7 +714,7 @@ async def api_generiraj_mp3(req: TTSRequest):
         config_p = knjiga_dir / "config.yaml"
         book_config = None
         if config_p.exists():
-            with open(config_p, 'r') as f:
+            with open(config_p, 'r', encoding='utf-8', errors='replace') as f:
                 book_config = yaml.safe_load(f)
 
         # Autodupliciranje: ako mapa postoji, kreira _001, _002 itd.
@@ -758,7 +815,9 @@ def pokreni_server(host: str = "127.0.0.1", port: int = 8000) -> None:
     print(f"\n  Web GUI dostupan na: http://{host}:{port}")
     print("  Pritisnite Ctrl+C za zaustavljanje servera.\n")
 
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    # access_log=False isključuje per-request logove (GET /api/status itd.)
+    # koji spamaju terminal. Startup/shutdown poruke ostaju vidljive.
+    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
 
 
 if __name__ == "__main__":
