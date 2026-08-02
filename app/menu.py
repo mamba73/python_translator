@@ -9,6 +9,7 @@ import sys
 import logging
 import os
 import json
+import asyncio
 import yaml
 from typing import Any, Callable, Optional
 from pathlib import Path
@@ -891,14 +892,16 @@ class Menu:
                 suffix_if_exists=True,
             )
 
-            # Pozovi TTSEngine
-            self._tts_engine.generiraj_audiobook(
+            # Pozovi TTSEngine — generiraj_audiobook je async metoda,
+            # mora se pokrenuti kroz asyncio.run() jer je show_phase4 sinkrona.
+            # Bez ovoga korutina nikada ne kreira MP3 (samo prazne mape).
+            asyncio.run(self._tts_engine.generiraj_audiobook(
                 tekst=tekst,
                 book_title=knjiga_dir.name,
                 book_config=book_config or {},
                 output_dir=audiobook_dir,
                 merge_single=(odabir == "2")
-            )
+            ))
 
             print(f"\nTTS sinteza završena: {audiobook_dir}")
 

@@ -100,8 +100,11 @@
     const bar = document.getElementById('status-bar');
     if (!bar) return;
 
+    // Provjeri LM Studio status samo jednom pri inicijalizaciji.
+    // NE koristimo setInterval — to bi svakih 10s slalo GET /v1/models
+    // prema LM Studio API-ju i zaglavilo logove. Osvježavanje na zahtjev
+    // korisnika (reload stranice) je dovoljno.
     refreshStatus();
-    setInterval(refreshStatus, 10000);
   }
 
   async function refreshStatus() {

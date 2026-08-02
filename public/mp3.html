@@ -97,6 +97,53 @@
   <div id="live-console" class="bg-black text-green-400 p-4 font-mono text-xs h-48 overflow-y-auto rounded-lg shadow-inner border border-gray-800"></div>
 </div>
 
+<!-- Modal: Progress TTS sinteze -->
+<div id="tts-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm">
+  <div class="bg-slate-800 border border-slate-600 rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col">
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+      <div>
+        <h3 class="text-lg font-bold text-white" id="tts-modal-naslov">🎧 TTS sinteza u tijeku...</h3>
+        <p class="text-xs text-orange-400 font-semibold mt-0.5" id="tts-modal-status">Priprema segmenata...</p>
+      </div>
+      <button id="tts-modal-zatvori" class="text-gray-400 hover:text-white text-2xl leading-none px-2 py-1 rounded hover:bg-slate-700 transition-colors">&times;</button>
+    </div>
+
+    <!-- Tijelo -->
+    <div class="px-6 py-5 flex-1 overflow-y-auto">
+      <!-- Progress bar -->
+      <div class="mb-4">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-sm text-gray-300" id="tts-modal-progress-tekst">0%</span>
+          <span class="text-xs text-gray-500" id="tts-modal-progress-detalji">Segment 0/0</span>
+          <span class="text-xs text-orange-400 font-semibold" id="tts-modal-progress-eta"></span>
+        </div>
+        <div class="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
+          <div id="tts-modal-progress-bar" class="bg-orange-500 h-full rounded-full transition-all duration-300" style="width: 0%"></div>
+        </div>
+        <div class="text-xs text-gray-500 mt-1.5" id="tts-modal-progress-info"></div>
+      </div>
+
+      <!-- Rezultat (prikazuje se nakon završetka) -->
+      <div id="tts-modal-rezultat" class="hidden">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-semibold text-green-400">✅ TTS sinteza završena</span>
+          <span class="text-xs text-gray-500" id="tts-modal-ime-foldera"></span>
+        </div>
+        <p class="text-sm text-gray-300" id="tts-modal-broj-mp3"></p>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="px-6 py-4 border-t border-slate-700 flex justify-end gap-3">
+      <button id="tts-modal-zatvori-dno"
+        class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors">
+        Zatvori
+      </button>
+    </div>
+  </div>
+</div>
+
 <script src="/js/main.js"></script>
 <script src="/js/mp3.js"></script>
 </body>

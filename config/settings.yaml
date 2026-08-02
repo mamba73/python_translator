@@ -60,7 +60,7 @@ tts:
   dialog:
     use_different_voice: true
     voice: hr-HR-GabrijelaNeural
-    rate: +2%
+    rate: +0%
     pitch: +0Hz
   dramatic_mode:
     enabled: true
@@ -75,7 +75,7 @@ tts:
     - kill
     - attack
     - terror
-    rate_modifier_anxious: +15%
+    rate_modifier_anxious: +5%
   segment:
     word_limit_soft: 500
     word_limit_hard: 600

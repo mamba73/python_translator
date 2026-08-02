@@ -196,10 +196,12 @@
 
     // Resetiraj modal
     document.getElementById('modal-naslov').textContent = tip === 'test' ? '🧪 TEST Prijevod' : '🚀 Produkcijski prijevod';
+    document.getElementById('modal-model-name').textContent = '';
     document.getElementById('modal-status').textContent = 'Priprema segmenata...';
     document.getElementById('modal-progress-tekst').textContent = '0%';
     document.getElementById('modal-progress-detalji').textContent = 'Segment 0/0';
     document.getElementById('modal-progress-rijeci').textContent = '';
+    document.getElementById('modal-progress-eta').textContent = '';
     document.getElementById('modal-progress-bar').style.width = '0%';
     document.getElementById('modal-rezultat').classList.add('hidden');
     document.getElementById('modal-kopiraj').classList.add('hidden');
@@ -246,12 +248,36 @@
     };
   }
 
+  /**
+   * Formatira ETA tekst za prikaz u modalu.
+   * Uključuje strogu zaštitu protiv negativnih i nelogičnih vrijednosti.
+   *
+   * @param {string} etaText - Sirovi ETA tekst iz backenda (npr. "5m 30s", "U završnoj fazi")
+   * @returns {string} Siguran ETA tekst za prikaz
+   */
+  function sanitizirajEta(etaText) {
+    if (!etaText || typeof etaText !== 'string') return '';
+    const trimmed = etaText.trim();
+    if (!trimmed) return '';
+
+    // Ako backend već šalje "U završnoj fazi" ili "< 1min", prihvati kao jest
+    if (trimmed === 'U završnoj fazi' || trimmed === '< 1min') return trimmed;
+
+    // Zaštita: ako tekst sadrži negativne brojeve, zamijeni s "U završnoj fazi"
+    if (trimmed.includes('-')) return 'U završnoj fazi';
+
+    // Inače vrati kakvo jest (npr. "5m 30s", "1h 15m")
+    return trimmed;
+  }
+
   function obradiModalLog(linija) {
-    // Progress linija: [Progres] : [██████] 33% | Segment 1/3 | riječi: 30/90 (33%)
+    // Progress linija: [Progres] : [██████] 33% | Segment 1/3 | riječi: 30/90 (33%) | ETA: 5m 30s
     if (linija.includes('[Progres]')) {
       const postotakMatch = linija.match(/(\d+)%/);
       const segmentMatch = linija.match(/Segment (\d+)\/(\d+)/);
       const rijeciMatch = linija.match(/riječi: ([\d\/]+) \((\d+)%\)/);
+      // ETA format: "ETA: 5m 30s" ili "ETA: U završnoj fazi" ili "ETA: < 1min"
+      const etaMatch = linija.match(/ETA:\s*(.+?)(?:\s*\||\s*$)/);
 
       if (postotakMatch) {
         const pct = parseInt(postotakMatch[1]);
@@ -264,25 +290,33 @@
       if (rijeciMatch) {
         document.getElementById('modal-progress-rijeci').textContent = `riječi: ${rijeciMatch[1]} (${rijeciMatch[2]}%)`;
       }
-const providerSelect = document.getElementById('provider-select');
-const modelName = providerSelect ? providerSelect.options[providerSelect.selectedIndex]?.text : '';
-if (modelName) {
-  document.getElementById('modal-status').textContent = `${modelName} - Prevođenje u tijeku...`;
-} else {
-  const providerSelect = document.getElementById('provider-select');
-const modelName = providerSelect ? providerSelect.options[providerSelect.selectedIndex]?.text : '';
-if (modelName) {
-  document.getElementById('modal-status').textContent = `${modelName} - Prevođenje u tijeku...`;
-} else {
-  const providerSelect = document.getElementById('provider-select');
-const modelName = providerSelect ? providerSelect.options[providerSelect.selectedIndex]?.text : '';
-if (modelName) {
-  document.getElementById('modal-status').textContent = `${modelName} - Prevođenje u tijeku...`;
-} else {
-  document.getElementById('modal-status').textContent = 'Prevođenje u tijeku...';
-}
-}
-}
+      // ETA — s zaštitom za negativne vrijednosti
+      const etaEl = document.getElementById('modal-progress-eta');
+      if (etaEl) {
+        if (etaMatch) {
+          const safeEta = sanitizirajEta(etaMatch[1]);
+          etaEl.textContent = safeEta ? `⏱ ${safeEta}` : '';
+        }
+        // Ako nema ETA u liniji, ostavi prethodnu vrijednost (ne briši)
+      }
+      // Status — uvijek samo "Prevođenje u tijeku..." (naziv modela ide u zasebni redak iznad)
+      document.getElementById('modal-status').textContent = 'Prevođenje u tijeku...';
+    }
+
+    // Dohvat naziva aktivnog modela iz backend log linija (NE iz dropdown-a)
+    // Format: "[LOKALNI MODEL] Detektiran aktivan model: <naziv>. Pokrećem prevođenje."
+    if (linija.includes('[LOKALNI MODEL]') && linija.includes('Detektiran aktivan model:')) {
+      const modelMatch = linija.match(/Detektiran aktivan model:\s*(.+?)\s*\.\s*Pokrećem/);
+      if (modelMatch) {
+        document.getElementById('modal-model-name').textContent = modelMatch[1].trim();
+      }
+    }
+    // Alternativni format: "✅ Auto-detektovan LM Studio model: <naziv>"
+    if (linija.includes('Auto-detektovan') && linija.includes('model:')) {
+      const modelMatch = linija.match(/model:\s*(.+?)$/);
+      if (modelMatch) {
+        document.getElementById('modal-model-name').textContent = modelMatch[1].trim();
+      }
     }
 
     // Završetak prijevoda

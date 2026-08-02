@@ -724,7 +724,9 @@ async def api_generiraj_mp3(req: TTSRequest):
         )
 
         logging.info(f"[TTS] Počinje: {putanja.name} → {audiobook_dir.name}")
-        tts.generiraj_audiobook(
+        # generiraj_audiobook je async — mora se await-ovati, inače se
+        # korutina nikada ne izvrši i nastaju samo prazne mape bez MP3.
+        await tts.generiraj_audiobook(
             tekst=tekst,
             book_title=knjiga_dir.name,
             book_config=book_config or {},

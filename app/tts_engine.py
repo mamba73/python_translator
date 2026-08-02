@@ -17,6 +17,7 @@ from mutagen.mp3 import MP3
 from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TCOM
 
 from app.file_manager import FileManager
+from app.utils import prikazi_progres
 
 
 class TTSEngine:
@@ -102,11 +103,22 @@ class TTSEngine:
             book_title: Naslov knjige za ID3.
             author: Autor za ID3.
         """
+        # Osiguraj da roditeljski direktorij postoji prije spremanja
+        putanja.parent.mkdir(parents=True, exist_ok=True)
+
         # Odredi glas na temelju sadržaja (dijalog vs naracija)
         voice, rate, pitch = self._odredi_glas(tekst)
 
         communicate = edge_tts.Communicate(tekst, voice, rate=rate, pitch=pitch)
         await communicate.save(str(putanja))
+
+        # Provjeri da je edge-tts uspio zapisati MP3 (ne samo praznu datoteku)
+        if not putanja.exists() or putanja.stat().st_size == 0:
+            raise RuntimeError(
+                f"edge-tts nije uspio zapisati MP3: {putanja} "
+                f"(postoji={putanja.exists()}, "
+                f"veličina={putanja.stat().st_size if putanja.exists() else 0}B)"
+            )
 
         # Dodaj ID3 tagove
         self._upisi_id3_tagove(putanja, chapter_num, part_num, book_title, author)
@@ -155,6 +167,14 @@ class TTSEngine:
             book_title: Naslov knjige.
             author: Autor knjige.
         """
+        # Provjeri da datoteka postoji i nije prazna — edge-tts mora biti zapisao MP3
+        if not putanja.exists() or putanja.stat().st_size == 0:
+            msg = (f"MP3 datoteka nije ispravno zapisana od edge-tts: {putanja} "
+                   f"(postoji={putanja.exists()}, "
+                   f"veličina={putanja.stat().st_size if putanja.exists() else 0}B)")
+            logging.error(msg)
+            raise RuntimeError(msg)
+
         try:
             audio = MP3(putanja, ID3=ID3)
 
@@ -210,30 +230,58 @@ class TTSEngine:
         # bez ponovnog sufiksiranja (izbjegava dvostruki _001).
         output_dir = self._fm.ensure_dir(output_dir, suffix_if_exists=False)
 
+        # Pre-izračunaj ukupan broj segmenata za progress bar + ETA
+        # (potrebno je segmentirati sva poglavlja unaprijed)
+        logging.info("[TTS] Priprema segmenata — analiziram poglavlja...")
+        sva_poglavlja_segmenti: list[tuple[int, list[list[str]]]] = []
+        ukupno_segmenata = 0
+        for ch_idx, poglavlje in enumerate(poglavlja_tekst, 1):
+            recenice = re.split(r'(?<=[.!?])\s+', poglavlje)
+            segmenti = self.izracunaj_segmente(recenice)
+            sva_poglavlja_segmenti.append((ch_idx, segmenti))
+            ukupno_segmenata += len(segmenti)
+        logging.info(f"[TTS] Ukupno segmenata za sintezu: {ukupno_segmenata}")
+
         global_counter = 1
+        obradeno = 0
         sve_mp3_putanje = []
 
-        for ch_idx, poglavlje in enumerate(poglavlja_tekst, 1):
-            # Podijeli poglavlje na rečenice
-            recenice = re.split(r'(?<=[.!?])\s+', poglavlje)
-
-            # Izračunaj segmente
-            segmenti = self.izracunaj_segmente(recenice)
-
+        for ch_idx, segmenti in sva_poglavlja_segmenti:
             for part_idx, segment in enumerate(segmenti, 1):
                 # Imenovanje: NNN_ChXX_partXXX.mp3
                 filename = f"{global_counter:03d}_Ch{ch_idx:02d}_part{part_idx:03d}.mp3"
                 mp3_path = output_dir / filename
 
                 segment_tekst = ' '.join(segment)
-                await self.generiraj_segment_mp3(
-                    segment_tekst, mp3_path, ch_idx, part_idx, book_title, author
-                )
-
-                sve_mp3_putanje.append(mp3_path)
+                try:
+                    await self.generiraj_segment_mp3(
+                        segment_tekst, mp3_path, ch_idx, part_idx, book_title, author
+                    )
+                    sve_mp3_putanje.append(mp3_path)
+                    logging.info(f"Generiran MP3: {filename}")
+                except Exception as seg_err:
+                    # Greška u jednom segmentu ne smije srušiti cijelu knjigu —
+                    # logiraj, ukloni eventualnu praznu datoteku i nastavi.
+                    logging.error(
+                        f"Greška pri generiranju segmenta {filename}: {seg_err}"
+                    )
+                    if mp3_path.exists() and mp3_path.stat().st_size == 0:
+                        try:
+                            mp3_path.unlink()
+                        except OSError:
+                            pass
                 global_counter += 1
+                obradeno += 1
 
-                logging.info(f"Generiran MP3: {filename}")
+                # Progress bar s ETA — koristi isti [Progres] format kao i
+                # prijevod, tako da WebSocket /stream-logs šalje linije koje
+                # frontend modal parsira i prikazuje u realnom vremenu.
+                dodatno = f"MP3: {filename}"
+                prikazi_progres(
+                    obradeno, ukupno_segmenata,
+                    f"Segment {obradeno}/{ukupno_segmenata}",
+                    dodatno
+                )
 
         # Ako je merge_single, spoji sve MP3 u jedan
         if merge_single and len(sve_mp3_putanje) > 1:
