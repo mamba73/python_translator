@@ -92,6 +92,121 @@ def load_book_config(book_dir: Path | str) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def check_book_config(book_dir: Path | str,
+                      book_title: str = "",
+                      author: str = "",
+                      original_file: str = "",
+                      profile_name: str = "sf_literature",
+                      year: str = "",
+                      language: str = "hr") -> dict[str, Any]:
+    """Provjerava postoje li config.yaml i memorija.json za knjigu.
+
+    Ako datoteke ne postoje, automatski ih kreira s defaultnim postavkama
+    (placeholderima) i izvučenim metapodacima (naslov, autor). Ako već
+    postoje, jednostavno ih učitava.
+
+    Ova funkcija se poziva na početku svakog od 4 WebUI koraka
+    (Konverzija, Čišćenje, Prijevod, MP3) kako bi se osigurala
+    per-book izolacija konfiguracije i memorije.
+
+    Args:
+        book_dir: Putanja do direktorija knjige (work/output/<Knjiga>/).
+        book_title: Naslov knjige (koristi se za kreiranje ako fali).
+        author: Autor knjige (koristi se za kreiranje ako fali).
+        original_file: Naziv izvorne datoteke.
+        profile_name: Ime konfiguracijskog profila.
+        year: Godina izdanja.
+        language: Jezik knjige.
+
+    Returns:
+        Per-book konfiguracija kao rječnik.
+    """
+    book_dir = Path(book_dir)
+    book_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = book_dir / "config.yaml"
+    memorija_path = None
+
+    if config_path.exists():
+        # Config već postoji — učitaj ga i provjeri memoriju
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                book_cfg = yaml.safe_load(f) or {}
+        except Exception as e:
+            logging.warning(f"[CONFIG] Greška pri učitavanju config.yaml: {e}")
+            book_cfg = {}
+
+        # Provjeri memoriju — ime je u config.yaml ili traži se *_memorija.json
+        memorija_file = book_cfg.get("memorija_file")
+        if memorija_file:
+            memorija_path = book_dir / memorija_file
+        else:
+            # Traži bilo koju *_memorija.json datoteku
+            for kandidat in book_dir.glob("*_memorija.json"):
+                memorija_path = kandidat
+                break
+
+        if memorija_path is None or not memorija_path.exists():
+            # Kreiraj memoriju ako ne postoji
+            _create_default_memorija(book_dir, book_cfg)
+            logging.info(f"[CONFIG] Kreirana memorija.json u: {book_dir}")
+    else:
+        # Config ne postoji — kreiraj ga s defaultima
+        if not book_title:
+            book_title = book_dir.name
+        if not author:
+            author = "Unknown"
+
+        book_cfg = create_book_config(
+            book_dir,
+            book_title=book_title,
+            author=author,
+            original_file=original_file,
+            profile_name=profile_name,
+            year=year,
+            language=language,
+        )
+        logging.info(f"[CONFIG] Kreirana config.yaml i memorija.json u: {book_dir}")
+
+    return book_cfg
+
+
+def _create_default_memorija(book_dir: Path, book_cfg: dict[str, Any]) -> None:
+    """Kreira default memorija.json s predefiniranim pravilima.
+
+    Koristi ime iz config.yaml (memorija_file) ili generira na temelju
+    naziva knjige.
+    """
+    import json
+
+    memorija_file = book_cfg.get("memorija_file")
+    if not memorija_file:
+        # Generiši ime na temelju book_title
+        title = book_cfg.get("book_title", book_dir.name)
+        memorija_file = f"{_sanitize_filename(title)}_memorija.json"
+        book_cfg["memorija_file"] = memorija_file
+
+    memorija_path = book_dir / memorija_file
+
+    if not memorija_path.exists():
+        predefinirana_memorija = {
+            "CHARACTERS": {
+                "ExampleCharacter": "Define character gender rules here (e.g. 'Treat strictly as MASCULINE grammar... Never switch to feminine')."
+            },
+            "GLOSSARY": {
+                "example term": "primjer prijevoda"
+            },
+            "GRAMMAR_FIXES": {
+                "refleks_jata": "Strictly follow standard Croatian ijekavica. Ensure words like 'bjesnio', 'sjena', 'vrijeme', 'rujan' are spelled correctly. Completely avoid Ekavica or regional variations like 'besnio', 'naucni', 'univerzitet'.",
+                "infinitives": "Strictly use standard Croatian infinitive forms ending in '-ti' or '-ći' in all phrases where right or intent is expressed. Completely avoid the regional 'da + present' syntax.",
+                "names": "Keep foreign names in their original spelling (e.g., 'John Campbell', 'Paul Atreides'). Do not use phonetic Serbian spelling conventions."
+            }
+        }
+        with open(memorija_path, "w", encoding="utf-8") as json_f:
+            json.dump(predefinirana_memorija, json_f, indent=2, ensure_ascii=False)
+        logging.info(f"Kreiran glosar s predefiniranim pravilima: {memorija_path}")
+
+
 def load_profile(profile_name: str) -> dict[str, Any]:
     """Učitava config/profile_<name>.yaml predložak.
 
@@ -177,7 +292,9 @@ def create_book_config(book_dir: Path | str,
                        author: str,
                        original_file: str,
                        profile_name: str = "sf_literature",
-                       api_provider: str | None = None) -> dict[str, Any]:
+                       api_provider: str | None = None,
+                       year: str = "",
+                       language: str = "hr") -> dict[str, Any]:
     """Generira i sprema work/output/<Knjiga>/config.yaml iz profil predloška.
 
     Automatski kreira i pripadajući memorija.json s predefiniranim pravilima.
@@ -191,6 +308,8 @@ def create_book_config(book_dir: Path | str,
     book_cfg: dict[str, Any] = {
         "book_title":    book_title,
         "author":        author,
+        "year":          year,
+        "language":      language,
         "original_file": original_file,
         "api_provider":  api_provider or "",
         "model":         "",

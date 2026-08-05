@@ -18,6 +18,7 @@ from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, TCOM
 
 from app.file_manager import FileManager
 from app.utils import prikazi_progres
+from app.metadata import generate_lrc_file, generate_metadata_file, split_sentences, estimate_duration
 
 
 class TTSEngine:
@@ -266,6 +267,7 @@ class TTSEngine:
         global_counter = 1
         obradeno = 0
         sve_mp3_putanje = list(postojece_mp3)  # Učitaj postojeće u listu
+        segment_metadata: list[dict[str, Any]] = []  # Za metadata.yaml
 
         for ch_idx, segmenti in sva_poglavlja_segmenti:
             for part_idx, segment in enumerate(segmenti, 1):
@@ -285,7 +287,30 @@ class TTSEngine:
                         segment_tekst, mp3_path, ch_idx, part_idx, book_title, author
                     )
                     sve_mp3_putanje.append(mp3_path)
-                    logging.info(f"Generiran MP3: {filename}")
+
+                    # Generiraj LRC datoteku za sinkronizirani prikaz teksta
+                    recenice = split_sentences(segment_tekst)
+                    lrc_path = generate_lrc_file(mp3_path, recenice)
+
+                    # Izmjeri stvarno trajanje MP3 za metadata.yaml
+                    duration = 0.0
+                    try:
+                        audio = MP3(mp3_path)
+                        duration = float(audio.info.length) if audio.info else 0.0
+                    except Exception:
+                        duration = estimate_duration(segment_tekst)
+
+                    # Spremi metapodatke segmenta
+                    segment_metadata.append({
+                        "file": filename,
+                        "chapter": ch_idx,
+                        "part": part_idx,
+                        "track": global_counter,
+                        "duration": duration,
+                        "lrc": lrc_path.name if lrc_path.exists() else "",
+                    })
+
+                    logging.info(f"Generiran MP3: {filename} (LRC: {lrc_path.name})")
                 except Exception as seg_err:
                     # Greška u jednom segmentu ne smije srušiti cijelu knjigu —
                     # logiraj, ukloni eventualnu praznu datoteku i nastavi.
@@ -318,6 +343,19 @@ class TTSEngine:
             # TODO: Implementirati spajanje MP3 (npr. pomoću pydub ili ffmpeg)
             # Za sada vraćamo sve MP3 putanje
             logging.warning("Merge single nije implementiran — vraćam sve segmente.")
+
+        # Generiraj metadata.yaml s popisom svih segmenata, poglavlja i trajanja
+        if segment_metadata:
+            book_cfg = book_config or {}
+            generate_metadata_file(
+                audiobook_dir=output_dir,
+                book_title=book_title,
+                author=author,
+                segments=segment_metadata,
+                year=book_cfg.get("year", ""),
+                language=book_cfg.get("language", "hr"),
+                source_file=book_cfg.get("original_file", ""),
+            )
 
         logging.info(f"Ukupno generirano {len(sve_mp3_putanje)} MP3 datoteka.")
         return sve_mp3_putanje

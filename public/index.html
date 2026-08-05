@@ -88,7 +88,7 @@
   <!-- Aktivni checkpointovi -->
   <section class="mb-10">
     <h2 class="text-xl font-semibold text-white mb-4">🔄 Aktivni checkpointovi</h2>
-    <div id="checkpointi-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div id="checkpoints-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       <div class="bg-slate-800 border border-slate-700 rounded-xl p-5 text-center text-gray-500 text-sm">
         Učitavanje...
       </div>
@@ -108,12 +108,12 @@
 <script src="/js/main.js"></script>
 <script>
   // Učitaj checkpointe
-  async function ucitajCheckpointe() {
-    const grid = document.getElementById('checkpointi-grid');
+  async function loadCheckpoints() {
+    const grid = document.getElementById('checkpoints-grid');
     try {
       const res = await fetch('/api/status');
       const data = await res.json();
-      const cps = data.checkpointi || [];
+      const cps = data.checkpoints || [];
 
       if (cps.length === 0) {
         grid.innerHTML = '<div class="bg-slate-800 border border-slate-700 rounded-xl p-5 text-center text-gray-500 text-sm">Nema aktivnih checkpointova.</div>';
@@ -122,7 +122,7 @@
 
       grid.innerHTML = '';
       cps.forEach(cp => {
-        const postotak = cp.postotak || 0;
+        const percent = cp.progress_percent || 0;
         const card = document.createElement('div');
         card.className = 'bg-slate-800 border border-slate-700 rounded-xl p-5';
         card.innerHTML = `
@@ -131,11 +131,11 @@
               <div class="font-semibold text-white text-sm">${escHtml(cp.book_title || 'Nepoznato')}</div>
               <div class="text-xs text-gray-400 mt-0.5">${escHtml(cp.author || '')}</div>
             </div>
-            <span class="text-blue-400 font-bold text-lg">${postotak}%</span>
+            <span class="text-blue-400 font-bold text-lg">${percent}%</span>
           </div>
           <div class="mb-3">
             <div class="bg-gray-700 rounded-full h-2">
-              <div class="bg-blue-500 h-2 rounded-full" style="width:${Math.min(postotak,100)}%"></div>
+              <div class="bg-blue-500 h-2 rounded-full" style="width:${Math.min(percent,100)}%"></div>
             </div>
             <div class="text-xs text-gray-500 mt-1">${cp.current_segment || 0} / ${cp.total_segments || 0} segmenata</div>
           </div>
@@ -149,9 +149,9 @@
     }
   }
 
-  function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function escHtml(s) { return String(s).replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>'); }
 
-  document.addEventListener('DOMContentLoaded', ucitajCheckpointe);
+  document.addEventListener('DOMContentLoaded', loadCheckpoints);
 </script>
 </body>
 </html>

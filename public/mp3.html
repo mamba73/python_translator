@@ -48,11 +48,11 @@
   <div class="bg-slate-800 border border-slate-700 rounded-xl p-4 mb-4 flex items-center gap-6">
     <span class="text-sm text-gray-300 font-medium">Način sinteze:</span>
     <label class="flex items-center gap-2 cursor-pointer">
-      <input type="radio" name="nacin" value="zasebne" checked class="accent-blue-500">
+      <input type="radio" name="mode" value="separate" checked class="accent-blue-500">
       <span class="text-sm text-gray-200">Zasebne MP3 datoteke po segmentima</span>
     </label>
     <label class="flex items-center gap-2 cursor-pointer">
-      <input type="radio" name="nacin" value="jedna" class="accent-blue-500">
+      <input type="radio" name="mode" value="single" class="accent-blue-500">
       <span class="text-sm text-gray-200">Jedna MP3 datoteka (cijela knjiga)</span>
     </label>
     <div class="ml-auto flex items-center gap-3">
@@ -60,11 +60,11 @@
         <div class="animate-spin w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full"></div>
         TTS u tijeku...
       </div>
-      <button id="btn-nastavi-mp3"
+      <button id="btn-resume-mp3"
         class="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed hidden">
         ⏯ Nastavi TTS
       </button>
-      <button id="btn-generiraj-mp3"
+      <button id="btn-generate-mp3"
         class="px-5 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
         🎧 Generiraj MP3 audiobook
       </button>
@@ -76,16 +76,19 @@
     ℹ️ Ako audiobook mapa već postoji, backend automatski kreira novu mapu s oznakom <code>_001</code>, <code>_002</code>, itd. — stara snimka ostaje netaknuta.
   </div>
 
+  <!-- Metapodaci odabrane knjige -->
+  <div id="metadata-container" class="hidden"></div>
+
   <!-- Tablica prevedenih datoteka -->
   <div class="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
     <table id="translated-table" class="w-full text-sm border-collapse">
       <thead class="bg-slate-900 text-gray-400 text-xs uppercase tracking-wider">
         <tr>
           <th class="py-3 px-3 w-8"></th>
-          <th class="py-3 px-3 text-left" data-sort="ime">Datoteka</th>
-          <th class="py-3 px-3 text-left" data-sort="tip">Tip prijevoda</th>
-          <th class="py-3 px-3 text-left" data-sort="velicina">Veličina</th>
-          <th class="py-3 px-3 text-left" data-sort="izmijenjeno">Datum izmjene</th>
+          <th class="py-3 px-3 text-left" data-sort="name">Datoteka</th>
+          <th class="py-3 px-3 text-left" data-sort="type">Tip prijevoda</th>
+          <th class="py-3 px-3 text-left" data-sort="size">Veličina</th>
+          <th class="py-3 px-3 text-left" data-sort="modified">Datum izmjene</th>
         </tr>
       </thead>
       <tbody id="translated-tbody">
@@ -107,10 +110,10 @@
     <!-- Header -->
     <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
       <div>
-        <h3 class="text-lg font-bold text-white" id="tts-modal-naslov">🎧 TTS sinteza u tijeku...</h3>
+        <h3 class="text-lg font-bold text-white" id="tts-modal-title">🎧 TTS sinteza u tijeku...</h3>
         <p class="text-xs text-orange-400 font-semibold mt-0.5" id="tts-modal-status">Priprema segmenata...</p>
       </div>
-      <button id="tts-modal-zatvori" class="text-gray-400 hover:text-white text-2xl leading-none px-2 py-1 rounded hover:bg-slate-700 transition-colors">&times;</button>
+      <button id="tts-modal-close" class="text-gray-400 hover:text-white text-2xl leading-none px-2 py-1 rounded hover:bg-slate-700 transition-colors">&times;</button>
     </div>
 
     <!-- Tijelo -->
@@ -118,8 +121,8 @@
       <!-- Progress bar -->
       <div class="mb-4">
         <div class="flex justify-between items-center mb-2">
-          <span class="text-sm text-gray-300" id="tts-modal-progress-tekst">0%</span>
-          <span class="text-xs text-gray-500" id="tts-modal-progress-detalji">Segment 0/0</span>
+          <span class="text-sm text-gray-300" id="tts-modal-progress-text">0%</span>
+          <span class="text-xs text-gray-500" id="tts-modal-progress-details">Segment 0/0</span>
           <span class="text-xs text-orange-400 font-semibold" id="tts-modal-progress-eta"></span>
         </div>
         <div class="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
@@ -129,26 +132,27 @@
       </div>
 
       <!-- Rezultat (prikazuje se nakon završetka) -->
-      <div id="tts-modal-rezultat" class="hidden">
+      <div id="tts-modal-result" class="hidden">
         <div class="flex items-center justify-between mb-2">
           <span class="text-sm font-semibold text-green-400">✅ TTS sinteza završena</span>
-          <span class="text-xs text-gray-500" id="tts-modal-ime-foldera"></span>
+          <span class="text-xs text-gray-500" id="tts-modal-folder-name"></span>
         </div>
-        <p class="text-sm text-gray-300" id="tts-modal-broj-mp3"></p>
+        <p class="text-sm text-gray-300" id="tts-modal-mp3-count"></p>
       </div>
     </div>
 
     <!-- Footer -->
     <div class="px-6 py-4 border-t border-slate-700 flex justify-end gap-3">
-      <button id="tts-modal-zatvori-dno"
+      <button id="tts-modal-close-bottom"
         class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors">
-        Zatvori
+        Zatvri
       </button>
     </div>
   </div>
 </div>
 
-<script src="/js/main.js"></script>
-<script src="/js/mp3.js"></script>
+<script src="/js/main.js?v=2"></script>
+<script src="/js/metadata.js?v=2"></script>
+<script src="/js/mp3.js?v=2"></script>
 </body>
 </html>

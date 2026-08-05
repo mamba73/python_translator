@@ -12,10 +12,10 @@
   const MAX_CONSOLE_LINES = 200;
 
   function initLiveConsole() {
-    const console_ = document.getElementById('live-console');
-    if (!console_) return;
+    const consoleEl = document.getElementById('live-console');
+    if (!consoleEl) return;
 
-    connectWS(console_);
+    connectWS(consoleEl);
   }
 
   function connectWS(consoleEl) {
@@ -123,7 +123,7 @@
 
       const cpCount = document.getElementById('cp-count');
       if (cpCount) {
-        cpCount.textContent = `Checkpointi: ${data.checkpointi.length}`;
+        cpCount.textContent = `Checkpointi: ${data.checkpoints.length}`;
       }
 
       if (data.sys_info && data.sys_info.cpu !== null) {
@@ -192,13 +192,13 @@
   }
 
   // ─── Toast obavijesti ─────────────────────────────────────────────────────
-  window.showToast = function (msg, tip) {
+  window.showToast = function (msg, type) {
     const container = document.getElementById('toast-container');
     if (!container) return;
 
     const toast = document.createElement('div');
-    const colorCls = tip === 'error' ? 'bg-red-700 border-red-500'
-      : tip === 'warn' ? 'bg-yellow-700 border-yellow-500'
+    const colorCls = type === 'error' ? 'bg-red-700 border-red-500'
+      : type === 'warn' ? 'bg-yellow-700 border-yellow-500'
       : 'bg-gray-800 border-green-500';
 
     toast.className = `border-l-4 ${colorCls} text-white px-4 py-3 rounded shadow-lg mb-2 text-sm transition-all`;

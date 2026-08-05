@@ -104,17 +104,24 @@ class Translator:
             self._book_memorija_id = novi_id
 
         if not memorija_putanja or not os.path.exists(memorija_putanja):
-            logging.info("ℹ️ Memorija datoteka ne postoji - koristim standardni system prompt")
+            logging.info("Memorija datoteka ne postoji - koristim standardni system prompt")
             return
 
         try:
             with open(memorija_putanja, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, dict) and data:
+            # Osiguraj da je data rječnik s potrebnim ključevima
+            if not isinstance(data, dict):
+                data = {}
+            data.setdefault("CHARACTERS", {})
+            data.setdefault("GLOSSARY", {})
+            data.setdefault("GRAMMAR_FIXES", {})
+            
+            if data:
                 type(self)._UCITANA_MEMORIJA = data
-                logging.info(f"✅ Učitano {len(data)} sekcija memorije iz: {memorija_putanja}")
+                logging.info(f"Učitano {len(data)} sekcija memorije iz: {memorija_putanja}")
             else:
-                logging.info("ℹ️ Memorija datoteka je prazna - koristim standardni system prompt")
+                logging.info("Memorija datoteka je prazna ili neispravna - koristim standardni system prompt")
         except Exception as e:
             logging.warning(f"Greška pri učitavanju memorija datoteke: {e}")
 
@@ -313,7 +320,7 @@ class Translator:
                 postojeci_segmenti = [s.strip() for s in postojeci_segmenti if s.strip()]
                 prevedeni = postojeci_segmenti[:resume_from]
                 akumulirane_rijeci = sum(len(s.split()) for s in prevedeni)
-                logging.info(f"✅ Resume: učitano {len(prevedeni)} prevedenih segmenata, nastavljam od {resume_from}")
+                logging.info(f"Resume: učitano {len(prevedeni)} prevedenih segmenata, nastavljam od {resume_from}")
             except Exception as e:
                 logging.warning(f"Greška pri učitavanju postojećeg prijevoda za resume: {e}")
 
@@ -371,7 +378,7 @@ class Translator:
                 prikazi_progres(idx + 1, ukupno, f"Segment {idx + 1}/{ukupno}", dodatno)
         except KeyboardInterrupt:
             # P4: Ctrl+C handler - spremi napredak i izađi čisto
-            print("\n⚠️ Zaustavljeno od strane korisnika. Napredak spremljen.")
+            print("\nZaustavljeno od strane korisnika. Napredak spremljen.")
             logging.warning("Zaustavljeno od strane korisnika (Ctrl+C). Napredak spremljen.")
             je_prekinuto = True
 
@@ -404,7 +411,7 @@ class Translator:
                 if os.path.getsize(output_path) > 0:
                     f.write(separator)
                 f.write(prijevod)
-            logging.info(f"✅ Spremljen chunk {idx + 1} u {os.path.basename(output_path)}")
+            logging.info(f"Spremljen chunk {idx + 1} u {os.path.basename(output_path)}")
         except Exception as e:
             logging.error(f"Greška pri spremanju chunka {idx + 1}: {e}")
 
@@ -630,18 +637,6 @@ class Translator:
 
         return payload
 
-    def _call_lm_studio(self, messages: list[dict[str, str]]) -> str:
-        """Adapter za LM Studio (OpenAI-compatible)."""
-        provider_cfg = self._api_cfg.get("providers", {}).get("lm_studio", {})
-        base_url = provider_cfg.get("base_url", "http://127.0.0.1:1234/v1")
-        model = provider_cfg.get("model", "")
-
-        payload = self._build_payload(messages)
-        if model:
-            payload["model"] = model
-
-        return self._http_request(f"{base_url}/chat/completions", payload)
-
     def _call_ollama(self, messages: list[dict[str, str]]) -> str:
         """Adapter za Ollama (lokalni ili cloud)."""
         # Koristimo _current_provider_cfg koji je vec dohvacen u __init__
@@ -814,7 +809,7 @@ class Translator:
             except urllib.error.HTTPError as e:
                 # P4: Fail-fast logika - trajne greške odmah zaustavljaju skriptu
                 if e.code in (401, 403, 404):
-                    logging.error(f"❌ KRITIČNA GREŠKA {e.code}: {e.reason}")
+                    logging.error(f"KRITIČNA GREŠKA {e.code}: {e.reason}")
                     raise RuntimeError(
                         f"Prekid zbog neautoriziranog pristupa (HTTP {e.code}: {e.reason})."
                     ) from e
@@ -824,7 +819,7 @@ class Translator:
                     if pokusaj <= max_automatskih:
                         wait_time = pocetni_delay * (backoff_factor ** (pokusaj - 1))
                         logging.warning(
-                            f"⚠️ Greška {e.code}. Pokušaj {pokusaj}/{max_automatskih}. Čekam {wait_time}s..."
+                            f"Greška {e.code}. Pokušaj {pokusaj}/{max_automatskih}. Čekam {wait_time}s..."
                         )
                         # Odbrojavanje na ekranu sekundu po sekundu
                         for preostalo in range(wait_time, 0, -1):
@@ -834,7 +829,7 @@ class Translator:
                         continue
                     else:
                         # Maksimalan broj automatskih pokušaja premašen, pitaj korisnika
-                        print(f"\n⚠️ Svi automatski pokušaji ponavljanja (HTTP {e.code}) su neuspješni.")
+                        print(f"\nSvi automatski pokušaji ponavljanja (HTTP {e.code}) su neuspješni.")
                         while True:
                             izbor = input("Želite li pokušati ponovno [Y] ili prekinuti proces [X]? (Y/X): ").strip().upper()
                             if izbor in ("Y", "D", "DA", "YES", "P"):
@@ -1001,7 +996,7 @@ class Translator:
                 data = json.loads(response.read().decode('utf-8'))
                 if data.get("data") and len(data["data"]) > 0:
                     model_id = data["data"][0]["id"]
-                    logging.info(f"✅ Auto-detektovan LM Studio model: {model_id}")
+                    logging.info(f"Auto-detektovan LM Studio model: {model_id}")
                     return model_id
         except Exception as e:
             logging.warning(f"LM Studio auto-detect nije uspio: {e}")
@@ -1023,7 +1018,7 @@ class Translator:
                 data = json.loads(response.read().decode('utf-8'))
                 if data.get("models") and len(data["models"]) > 0:
                     model_name = data["models"][0]["name"]
-                    logging.info(f"✅ Auto-detektovan Ollama model: {model_name}")
+                    logging.info(f"Auto-detektovan Ollama model: {model_name}")
                     return model_name
         except Exception as e:
             logging.warning(f"Ollama auto-detect nije uspio: {e}")

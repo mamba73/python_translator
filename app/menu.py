@@ -450,16 +450,25 @@ class Menu:
             print(f"\nKonverzija: {rel_path}")
 
             try:
-                # Učitaj tekst iz dokumenta
+                # 1. Automatsko čitanje naslova i autora od samog početka
+                from app.metadata import extract_book_metadata
+                print(f"  -> Čitam metapodatke iz: {putanja.name}")
+                meta = extract_book_metadata(putanja, self._cfg)
+                book_title = meta.get("title") or putanja.stem
+                author = meta.get("author") or "Autor"
+                year = meta.get("year", "")
+                language = meta.get("language", "hr")
+                print(f"  -> Naslov: {book_title} | Autor: {author}")
+
+                # 2. Učitaj tekst iz dokumenta
                 tekst = self._doc_proc.ucitaj_izvorni_tekst(str(putanja))
 
-                # Kreiraj per-book direktorij kroz FileManager
-                book_title = putanja.stem
+                # 3. Kreiraj per-book direktorij kroz FileManager
                 book_dir = self._fm.work_output_book_dir(book_title)
 
                 # Zaštita od prepisivanja: book.txt → book_001.txt → book_002.txt
                 izlazna_putanja = self._fm.ensure_file_path(
-                    book_dir / f"{putanja.stem}.txt",
+                    book_dir / f"{book_title}.txt",
                     suffix_if_exists=True,
                 )
 
@@ -468,17 +477,31 @@ class Menu:
 
                 print(f"  -> Spremljeno: {izlazna_putanja}")
 
-                # Kreiraj per-book config.yaml ako ne postoji
+                # 4. Kreiraj per-book config.yaml s automatski izvučenim metapodacima
                 config_putanja = book_dir / "config.yaml"
                 if not config_putanja.exists():
                     from app.config_loader import create_book_config
                     create_book_config(
                         book_dir=book_dir,
                         book_title=book_title,
-                        author="Autor",
+                        author=author,
                         original_file=putanja.name,
                         profile_name="sf_literature"
                     )
+                    # Dodaj godinu i jezik u config.yaml
+                    try:
+                        import yaml as _yaml
+                        with open(config_putanja, 'r', encoding='utf-8') as f:
+                            book_cfg = _yaml.safe_load(f) or {}
+                        if year:
+                            book_cfg["year"] = year
+                        if language:
+                            book_cfg["language"] = language
+                        with open(config_putanja, 'w', encoding='utf-8') as f:
+                            _yaml.dump(book_cfg, f, Dumper=_yaml.SafeDumper,
+                                       allow_unicode=True, default_flow_style=False, sort_keys=False)
+                    except Exception as cfg_err:
+                        logging.warning(f"[METADATA] Greška pri ažuriranju config.yaml: {cfg_err}")
                     print(f"  -> Config: {config_putanja.name}")
 
             except Exception as e:

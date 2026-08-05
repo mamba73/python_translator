@@ -34,6 +34,7 @@
 21. [Refactoring — modularna arhitektura](#21-refactoring--modularna-arhitektura)
 22. [Upravljanje direktorijima i datotekama — unificirana metoda](#22-upravljanje-direktorijima-i-datotekama--unificirana-metoda)
 23. [MP3 imenovanje i metapodaci](#23-mp3-imenovanje-i-metapodaci)
+24. [Automatizacija metapodataka (V0.5)](#24-automatizacija-metapodataka-v05)
 
 ---
 
@@ -126,7 +127,8 @@ project_root/
 │   ├── document_processor.py        # Faza 1: konverzija dokumenata
 │   ├── text_cleaner.py              # Faza 2: čišćenje [fixed] + kreiranje memorije
 │   ├── translator.py                # Faza 3: LLM prevođenje (odlomak/paragraf/rečenica)
-│   ├── tts_engine.py                # Faza 4: TTS sinteza u MP3
+│   ├── tts_engine.py                # Faza 4: TTS sinteza u MP3 + LRC + metadata.yaml
+│   ├── metadata.py                  # Automatska ekstrakcija naslova/autora, metadata.yaml, LRC
 │   ├── file_manager.py              # Unificirana metoda za direktorije i datoteke
 │   ├── checkpoint.py                # Multi-checkpoint perzistencija
 │   ├── logger.py                    # Trorazinsko logiranje
@@ -1134,7 +1136,8 @@ Sve o formatu, headeru i sadržaju izlaznih datoteka opisano je u:
 | `document_processor.py` | Faza 1: parsiranje dokumenata (PDF, EPUB, DOCX, MOBI, TXT) |
 | `text_cleaner.py` | Faza 2: čišćenje headera/footera, kreiranje `[fixed]` i `memorija.json` |
 | `translator.py` | Faza 3: LLM prijevod (odlomak, paragraf, rečenica; TEST i produkcija) |
-| `tts_engine.py` | Faza 4: TTS sinteza, generiranje MP3 s ID3 tagovima |
+| `tts_engine.py` | Faza 4: TTS sinteza, generiranje MP3 s ID3 tagovima, LRC i metadata.yaml |
+| `metadata.py` | Automatska ekstrakcija naslova/autora, generiranje metadata.yaml i LRC datoteka |
 | `file_manager.py` | Unificirana metoda za direktorije, datoteke i suffix-increment |
 | `checkpoint.py` | Multi-checkpoint perzistencija, atomski zapis |
 | `logger.py` | Trorazinsko logiranje |
@@ -1256,6 +1259,88 @@ Prefiks se uvijek oblikuje s 3 znamenke (`%03d`).
 ### 23.3 Izlazni direktorij
 
 MP3 se sprema u `work/audiobooks/<naslov-autor>/`. Ako direktorij postoji → suffix `_001`, `_002`... putem `FileManager.audiobook_dir()`.
+
+---
+
+## 24. AUTOMATIZACIJA METAPODATAKA (V0.5)
+
+### 24.1 Automatsko čitanje naslova i autora
+
+Na samom početku procesa konverzije (`/api/konvertuj` i CLI Faza 1), skripta automatski parsira naslov i autora iz ulazne datoteke prije prevođenja i TTS generiranja.
+
+**Redoslijed ekstrakcije** (`app/metadata.py` → `extract_book_metadata()`):
+
+1. **Struktura dokumenta:**
+   - EPUB → DC metadata (`title`, `creator`, `date`, `language`)
+   - PDF → `/Title`, `/Author`, `/CreationDate`
+   - DOCX → core properties (`title`, `author`, `created`)
+   - TXT → prvi redovi (`Title:`, `Author:`, `by Author`, `(godina)`)
+
+2. **Naziv datoteke** (regex parsiranje):
+   - `01 Foundation - Isaac Asimov.epub` → title="Foundation", author="Isaac Asimov"
+   - `The Hobbit by J.R.R. Tolkien.pdf` → title="The Hobbit", author="J.R.R. Tolkien"
+   - `Foundation_Isaac_Asimov.docx` → title="Foundation", author="Isaac Asimov"
+
+3. **Fallback:** naziv datoteke bez ekstenzije + "Unknown" autor.
+
+**Prosljeđivanje kroz pipeline:**
+- `book_title` i `author` se spremaju u `work/output/<Knjiga>/config.yaml`
+- `year` i `language` se dodaju u config.yaml ako su pronađeni
+- `Translator.postavi_knjigu()` čita iz config.yaml
+- `TTSEngine.generiraj_audiobook()` koristi za ID3 tagove (`TALB`, `TPE1`)
+
+### 24.2 Generiranje metadata.yaml
+
+Nakon TTS sinteze, u audiobook direktoriju se automatski generira `metadata.yaml`:
+
+```yaml
+book:
+  title: Foundation
+  author: Isaac Asimov
+  year: '1951'
+  language: hr
+  source_file: book.epub
+generated_at: '2026-08-04T20:15:30'
+total_segments: 42
+total_duration: 1250.75
+chapters:
+  - broj: 1
+    naziv: Chapter 1
+    segmenata: 3
+    trajanje: 95.2
+    segmenti:
+      - file: 001_Ch01_part001.mp3
+        track: 1
+        part: 1
+        duration: 32.5
+        lrc: 001_Ch01_part001.lrc
+```
+
+**Svrha:** MP3 parser može precizno čitati i upisivati ID3 tagove (`TIT2`, `TPE1`, `TALB`, `TRCK`) na temelju ove datoteke.
+
+### 24.3 Generiranje LRC datoteka
+
+Uz svaki MP3 segment generira se i `.lrc` datoteka s vremenskim žigovima:
+
+```
+[00:00.00] Ovo je prva rečenica.
+[00:01.55] Ovo je druga rečenica.
+[00:03.17] Ovo je treća rečenica?
+```
+
+- Vremenski žigovi se procjenjuju proporcionalno duljini rečenica unutar ukupnog trajanja segmenta
+- Ukupno trajanje se mjeri iz stvarnog MP3 (via `mutagen`), a ako mjerenje ne uspije, koristi se procjena (150 riječi/min)
+- Omogućuje prikaz teksta koji se trenutno izgovara u kompatibilnim playerima na mobitelu
+
+### 24.4 Praćenje napretka od početka obrade
+
+Progress bar (`prikazi_progres`) se pokreće od **samog početka** ulazne obrade:
+
+- **Konverzija:** progress se prikazuje prije parsiranja metapodataka, tijekom čitanja teksta i nakon spremanja
+- **Prijevod:** progress s brojem riječi i ETA (već postojeće)
+- **TTS:** progress s brojem segmenata i ETA (već postojeće)
+
+Sve poruke se prenose u stvarnom vremenu prema Web UI modalu putem WebSocket `/stream-logs` veze. ETA ima strogu zaštitu protiv negativnih vrijednosti (`_format_eta` u `app/utils.py` i `sanitizirajEta` u frontend JS).
 
 ---
 

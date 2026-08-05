@@ -1,47 +1,72 @@
 /**
  * prevod.js — Logika za Korak 3: LLM Prijevod
- * Slajder, Toggle, Dropdown — sve promjene šalju POST na /api/opcije
+ * Slajder, Toggle, Dropdown — sve promjene šalju POST na /api/options
  * Provider Dropdown šalje POST na /api/provider
  */
 
 (function () {
   'use strict';
 
-  let opcijeDebounce = null;
+  let optionsDebounce = null;
 
-  async function ucitajFixedDatoteke() {
+  async function loadFixedFiles() {
     const select = document.getElementById('fixed-select');
     if (!select) return;
 
     try {
-      const res = await fetch('/api/fixed-datoteke');
+      const res = await fetch('/api/fixed-files');
       const data = await res.json();
-      const datoteke = data.datoteke || [];
+      const files = data.files || [];
 
       select.innerHTML = '<option value="">-- Odaberite datoteku --</option>';
-      datoteke.forEach(d => {
+      files.forEach(d => {
         const opt = document.createElement('option');
         opt.value = d.rel_path;
-        opt.textContent = `${d.knjiga ? d.knjiga + '/' : ''}${d.ime}  [${d.izmijenjeno}]`;
+        opt.textContent = `${d.book ? d.book + '/' : ''}${d.name}  [${d.modified}]`;
         select.appendChild(opt);
       });
+
+      // Event listener za promjenu odabira — učitaj metapodatke
+      function showSelectedFile() {
+        const relPath = select.value;
+        const container = document.getElementById('metadata-container');
+        if (!container) return;
+
+        if (!relPath) {
+          container.classList.add('hidden');
+          container.innerHTML = '';
+          return;
+        }
+
+        if (typeof MetadataForm === 'undefined') {
+          console.error('[prevod.js] MetadataForm nije učitan!');
+          return;
+        }
+        container.innerHTML = MetadataForm.generirajHTML();
+        container.classList.remove('hidden');
+        MetadataForm.init('metadata-container', relPath);
+        MetadataForm.postaviSpremi('metadata-container', relPath);
+      }
+
+      select.addEventListener('change', showSelectedFile);
+      showSelectedFile();
     } catch (err) {
       showToast('Greška pri učitavanju datoteka: ' + err.message, 'error');
     }
   }
 
-  async function ucitajProfile() {
-    const select = document.getElementById('profil-select');
+  async function loadProfiles() {
+    const select = document.getElementById('profile-select');
     if (!select) return;
 
     try {
-      const res = await fetch('/api/profili');
+      const res = await fetch('/api/profiles');
       const data = await res.json();
       select.innerHTML = '';
-      (data.profili || []).forEach(p => {
+      (data.profiles || []).forEach(p => {
         const opt = document.createElement('option');
         opt.value = p.id;
-        opt.textContent = p.ime;
+        opt.textContent = p.name;
         select.appendChild(opt);
       });
     } catch (err) {
@@ -49,7 +74,7 @@
     }
   }
 
-  async function ucitajAktivniProvider() {
+  async function loadActiveProvider() {
     const select = document.getElementById('provider-select');
     if (!select) return;
     try {
@@ -73,7 +98,7 @@
     }
   }
 
-  async function promijeniProvider(providerKey) {
+  async function changeProvider(providerKey) {
     const warnEl = document.getElementById('provider-warn');
     try {
       const res = await fetch('/api/provider', {
@@ -86,12 +111,12 @@
         showToast('Greška: ' + (data.detail || 'Nepoznata greška'), 'error');
         return;
       }
-      if (!data.key_ok && data.poruka) {
+      if (!data.key_ok && data.message) {
         if (warnEl) {
-          warnEl.textContent = '⚠ ' + data.poruka;
+          warnEl.textContent = '⚠ ' + data.message;
           warnEl.classList.remove('hidden');
         }
-        showToast(data.poruka, 'warn');
+        showToast(data.message, 'warn');
       } else {
         if (warnEl) warnEl.classList.add('hidden');
         showToast(`Provider: ${data.title}`, 'info');
@@ -101,46 +126,46 @@
     }
   }
 
-  async function ucitajOpcije() {
+  async function loadOptions() {
     try {
-      const res = await fetch('/api/opcije');
+      const res = await fetch('/api/options');
       const data = await res.json();
 
-      const slider = document.getElementById('kolicina-slider');
-      const sliderVal = document.getElementById('kolicina-val');
+      const slider = document.getElementById('count-slider');
+      const sliderVal = document.getElementById('count-val');
       const toggle = document.getElementById('header-toggle');
-      const granSelect = document.getElementById('granularnost-select');
-      const profilSelect = document.getElementById('profil-select');
+      const granSelect = document.getElementById('granularity-select');
+      const profileSelect = document.getElementById('profile-select');
 
       if (slider && sliderVal) {
-        slider.value = data.kolicina || 1;
-        sliderVal.textContent = data.kolicina || 1;
+        slider.value = data.count || 1;
+        sliderVal.textContent = data.count || 1;
       }
       if (toggle) toggle.checked = data.header !== false;
-      if (granSelect) granSelect.value = data.granularnost || 'paragraph';
-      if (profilSelect && data.profil) profilSelect.value = data.profil;
+      if (granSelect) granSelect.value = data.granularity || 'paragraph';
+      if (profileSelect && data.profile) profileSelect.value = data.profile;
     } catch (err) {
       // Ignoriraj
     }
   }
 
-  function spremiOpcije() {
-    clearTimeout(opcijeDebounce);
-    opcijeDebounce = setTimeout(async () => {
-      const slider = document.getElementById('kolicina-slider');
+  function saveOptions() {
+    clearTimeout(optionsDebounce);
+    optionsDebounce = setTimeout(async () => {
+      const slider = document.getElementById('count-slider');
       const toggle = document.getElementById('header-toggle');
-      const granSelect = document.getElementById('granularnost-select');
-      const profilSelect = document.getElementById('profil-select');
+      const granSelect = document.getElementById('granularity-select');
+      const profileSelect = document.getElementById('profile-select');
 
       const payload = {
-        kolicina: slider ? parseInt(slider.value) : undefined,
+        count: slider ? parseInt(slider.value) : undefined,
         header: toggle ? toggle.checked : undefined,
-        granularnost: granSelect ? granSelect.value : undefined,
-        profil: profilSelect ? profilSelect.value : undefined
+        granularity: granSelect ? granSelect.value : undefined,
+        profile: profileSelect ? profileSelect.value : undefined
       };
 
       try {
-        await fetch('/api/opcije', {
+        await fetch('/api/options', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -153,70 +178,70 @@
   }
 
   document.addEventListener('DOMContentLoaded', async () => {
-    await ucitajProfile();
-    await ucitajFixedDatoteke();
-    await ucitajOpcije();
-    await ucitajAktivniProvider();
+    await loadProfiles();
+    await loadFixedFiles();
+    await loadOptions();
+    await loadActiveProvider();
 
     // Provider dropdown
     document.getElementById('provider-select')?.addEventListener('change', function () {
-      promijeniProvider(this.value);
+      changeProvider(this.value);
     });
 
     // Slajder
-    const slider = document.getElementById('kolicina-slider');
-    const sliderVal = document.getElementById('kolicina-val');
+    const slider = document.getElementById('count-slider');
+    const sliderVal = document.getElementById('count-val');
     slider?.addEventListener('input', () => {
       if (sliderVal) sliderVal.textContent = slider.value;
-      spremiOpcije();
+      saveOptions();
     });
 
     // Toggle
-    document.getElementById('header-toggle')?.addEventListener('change', spremiOpcije);
+    document.getElementById('header-toggle')?.addEventListener('change', saveOptions);
 
     // Dropdowni
-    document.getElementById('granularnost-select')?.addEventListener('change', spremiOpcije);
-    document.getElementById('profil-select')?.addEventListener('change', spremiOpcije);
+    document.getElementById('granularity-select')?.addEventListener('change', saveOptions);
+    document.getElementById('profile-select')?.addEventListener('change', saveOptions);
 
     // Gumb TEST
-    document.getElementById('btn-test')?.addEventListener('click', () => pokreniPrejevod('test'));
+    document.getElementById('btn-test')?.addEventListener('click', () => startTranslation('test'));
 
     // Gumb Produkcijski
-    document.getElementById('btn-produkcija')?.addEventListener('click', () => pokreniPrejevod('produkcija'));
+    document.getElementById('btn-production')?.addEventListener('click', () => startTranslation('production'));
   });
 
   // ─── Modal: Progress prijevoda ────────────────────────────────────────────
   let modalWs = null;
   let modalReconnectTimer = null;
-  let modalImeDatoteke = null;
+  let modalFileName = null;
 
-  function otvoriModal(tip) {
-    const modal = document.getElementById('prevod-modal');
+  function openModal(mode) {
+    const modal = document.getElementById('translation-modal');
     if (!modal) return;
 
     // Resetiraj modal
-    document.getElementById('modal-naslov').textContent = tip === 'test' ? '🧪 TEST Prijevod' : '🚀 Produkcijski prijevod';
+    document.getElementById('modal-title').textContent = mode === 'test' ? '🧪 TEST Prijevod' : '🚀 Produkcijski prijevod';
     document.getElementById('modal-model-name').textContent = '';
     document.getElementById('modal-status').textContent = 'Priprema segmenata...';
-    document.getElementById('modal-progress-tekst').textContent = '0%';
-    document.getElementById('modal-progress-detalji').textContent = 'Segment 0/0';
-    document.getElementById('modal-progress-rijeci').textContent = '';
+    document.getElementById('modal-progress-text').textContent = '0%';
+    document.getElementById('modal-progress-details').textContent = 'Segment 0/0';
+    document.getElementById('modal-progress-words').textContent = '';
     document.getElementById('modal-progress-eta').textContent = '';
     document.getElementById('modal-progress-bar').style.width = '0%';
-    document.getElementById('modal-rezultat').classList.add('hidden');
-    document.getElementById('modal-kopiraj').classList.add('hidden');
-    document.getElementById('modal-tekst').value = '';
-    modalImeDatoteke = null;
+    document.getElementById('modal-result').classList.add('hidden');
+    document.getElementById('modal-copy').classList.add('hidden');
+    document.getElementById('modal-text').value = '';
+    modalFileName = null;
 
     modal.classList.remove('hidden');
     modal.classList.add('flex');
 
     // Spoji se na log stream za real-time progress
-    spojiModalWS();
+    connectModalWS();
   }
 
-  function zatvoriModal() {
-    const modal = document.getElementById('prevod-modal');
+  function closeModal() {
+    const modal = document.getElementById('translation-modal');
     if (modal) {
       modal.classList.add('hidden');
       modal.classList.remove('flex');
@@ -228,7 +253,7 @@
     clearTimeout(modalReconnectTimer);
   }
 
-  function spojiModalWS() {
+  function connectModalWS() {
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
     const url = `${protocol}://${location.host}/stream-logs`;
 
@@ -236,11 +261,11 @@
 
     modalWs.onmessage = (evt) => {
       if (evt.data === 'PING') return;
-      obradiModalLog(evt.data);
+      processModalLog(evt.data);
     };
 
     modalWs.onclose = () => {
-      modalReconnectTimer = setTimeout(spojiModalWS, 3000);
+      modalReconnectTimer = setTimeout(connectModalWS, 3000);
     };
 
     modalWs.onerror = () => {
@@ -255,7 +280,7 @@
    * @param {string} etaText - Sirovi ETA tekst iz backenda (npr. "5m 30s", "U završnoj fazi")
    * @returns {string} Siguran ETA tekst za prikaz
    */
-  function sanitizirajEta(etaText) {
+  function sanitizeEta(etaText) {
     if (!etaText || typeof etaText !== 'string') return '';
     const trimmed = etaText.trim();
     if (!trimmed) return '';
@@ -266,35 +291,35 @@
     // Zaštita: ako tekst sadrži negativne brojeve, zamijeni s "U završnoj fazi"
     if (trimmed.includes('-')) return 'U završnoj fazi';
 
-    // Inače vrati kakvo jest (npr. "5m 30s", "1h 15m")
+    // Inače vrati kakav jest (npr. "5m 30s", "1h 15m")
     return trimmed;
   }
 
-  function obradiModalLog(linija) {
+  function processModalLog(line) {
     // Progress linija: [Progres] : [██████] 33% | Segment 1/3 | riječi: 30/90 (33%) | ETA: 5m 30s
-    if (linija.includes('[Progres]')) {
-      const postotakMatch = linija.match(/(\d+)%/);
-      const segmentMatch = linija.match(/Segment (\d+)\/(\d+)/);
-      const rijeciMatch = linija.match(/riječi: ([\d\/]+) \((\d+)%\)/);
+    if (line.includes('[Progres]')) {
+      const percentMatch = line.match(/(\d+)%/);
+      const segmentMatch = line.match(/Segment (\d+)\/(\d+)/);
+      const wordsMatch = line.match(/riječi: ([\d\/]+) \((\d+)%\)/);
       // ETA format: "ETA: 5m 30s" ili "ETA: U završnoj fazi" ili "ETA: < 1min"
-      const etaMatch = linija.match(/ETA:\s*(.+?)(?:\s*\||\s*$)/);
+      const etaMatch = line.match(/ETA:\s*(.+?)(?:\s*\||\s*$)/);
 
-      if (postotakMatch) {
-        const pct = parseInt(postotakMatch[1]);
-        document.getElementById('modal-progress-tekst').textContent = pct + '%';
+      if (percentMatch) {
+        const pct = parseInt(percentMatch[1]);
+        document.getElementById('modal-progress-text').textContent = pct + '%';
         document.getElementById('modal-progress-bar').style.width = pct + '%';
       }
       if (segmentMatch) {
-        document.getElementById('modal-progress-detalji').textContent = `Segment ${segmentMatch[1]}/${segmentMatch[2]}`;
+        document.getElementById('modal-progress-details').textContent = `Segment ${segmentMatch[1]}/${segmentMatch[2]}`;
       }
-      if (rijeciMatch) {
-        document.getElementById('modal-progress-rijeci').textContent = `riječi: ${rijeciMatch[1]} (${rijeciMatch[2]}%)`;
+      if (wordsMatch) {
+        document.getElementById('modal-progress-words').textContent = `riječi: ${wordsMatch[1]} (${wordsMatch[2]}%)`;
       }
       // ETA — s zaštitom za negativne vrijednosti
       const etaEl = document.getElementById('modal-progress-eta');
       if (etaEl) {
         if (etaMatch) {
-          const safeEta = sanitizirajEta(etaMatch[1]);
+          const safeEta = sanitizeEta(etaMatch[1]);
           etaEl.textContent = safeEta ? `⏱ ${safeEta}` : '';
         }
         // Ako nema ETA u liniji, ostavi prethodnu vrijednost (ne briši)
@@ -305,33 +330,33 @@
 
     // Dohvat naziva aktivnog modela iz backend log linija (NE iz dropdown-a)
     // Format: "[LOKALNI MODEL] Detektiran aktivan model: <naziv>. Pokrećem prevođenje."
-    if (linija.includes('[LOKALNI MODEL]') && linija.includes('Detektiran aktivan model:')) {
-      const modelMatch = linija.match(/Detektiran aktivan model:\s*(.+?)\s*\.\s*Pokrećem/);
+    if (line.includes('[LOKALNI MODEL]') && line.includes('Detektiran aktivan model:')) {
+      const modelMatch = line.match(/Detektiran aktivan model:\s*(.+?)\s*\.\s*Pokrećem/);
       if (modelMatch) {
         document.getElementById('modal-model-name').textContent = modelMatch[1].trim();
       }
     }
     // Alternativni format: "✅ Auto-detektovan LM Studio model: <naziv>"
-    if (linija.includes('Auto-detektovan') && linija.includes('model:')) {
-      const modelMatch = linija.match(/model:\s*(.+?)$/);
+    if (line.includes('Auto-detektovan') && line.includes('model:')) {
+      const modelMatch = line.match(/model:\s*(.+?)$/);
       if (modelMatch) {
         document.getElementById('modal-model-name').textContent = modelMatch[1].trim();
       }
     }
 
     // Završetak prijevoda
-    if (linija.includes('[PRIJEVOD] Završen')) {
-      const imeMatch = linija.match(/Završen (?:test|produkcijski): (.+?)(?:\s*\(status=.*\))?$/);
-      if (imeMatch) {
-        modalImeDatoteke = imeMatch[1].trim();
+    if (line.includes('[PRIJEVOD] Završen')) {
+      const nameMatch = line.match(/Završen (?:test|produkcijski): (.+?)(?:\s*\(status=.*\))?$/);
+      if (nameMatch) {
+        modalFileName = nameMatch[1].trim();
       }
       document.getElementById('modal-status').textContent = 'Završeno! Učitavam tekst...';
-      document.getElementById('modal-progress-tekst').textContent = '100%';
+      document.getElementById('modal-progress-text').textContent = '100%';
       document.getElementById('modal-progress-bar').style.width = '100%';
     }
   }
 
-  async function prikaziRezultat(relPath) {
+  async function showResult(relPath) {
     try {
       const res = await fetch('/api/translated-content', {
         method: 'POST',
@@ -341,11 +366,11 @@
       if (!res.ok) throw new Error('Ne mogu učitati tekst');
       const data = await res.json();
 
-      document.getElementById('modal-tekst').value = data.sadrzaj;
-      document.getElementById('modal-ime-datoteke').textContent = data.ime;
-      document.getElementById('modal-rezultat').classList.remove('hidden');
-      document.getElementById('modal-kopiraj').classList.remove('hidden');
-      document.getElementById('modal-naslov').textContent = '✅ Prijevod završen';
+      document.getElementById('modal-text').value = data.content;
+      document.getElementById('modal-file-name').textContent = data.name;
+      document.getElementById('modal-result').classList.remove('hidden');
+      document.getElementById('modal-copy').classList.remove('hidden');
+      document.getElementById('modal-title').textContent = '✅ Prijevod završen';
       document.getElementById('modal-status').textContent = 'Tekst je spreman za pregled.';
     } catch (e) {
       document.getElementById('modal-status').textContent = 'Greška pri učitavanju teksta.';
@@ -353,7 +378,7 @@
     }
   }
 
-  async function pokreniPrejevod(tip) {
+  async function startTranslation(mode) {
     const select = document.getElementById('fixed-select');
     const relPath = select?.value;
     if (!relPath) {
@@ -361,29 +386,29 @@
       return;
     }
 
-    const slider = document.getElementById('kolicina-slider');
+    const slider = document.getElementById('count-slider');
     const toggle = document.getElementById('header-toggle');
-    const granSelect = document.getElementById('granularnost-select');
-    const profilSelect = document.getElementById('profil-select');
+    const granSelect = document.getElementById('granularity-select');
+    const profileSelect = document.getElementById('profile-select');
 
     const payload = {
       rel_path: relPath,
-      tip,
-      granularnost: granSelect?.value || 'paragraph',
-      kolicina: slider ? parseInt(slider.value) : 1,
+      mode,
+      granularity: granSelect?.value || 'paragraph',
+      count: slider ? parseInt(slider.value) : 1,
       header: toggle ? toggle.checked : true,
-      profil: profilSelect?.value || 'sf_literature'
+      profile: profileSelect?.value || 'sf_literature'
     };
 
-    const btnId = tip === 'test' ? 'btn-test' : 'btn-produkcija';
+    const btnId = mode === 'test' ? 'btn-test' : 'btn-production';
     const btn = document.getElementById(btnId);
     if (btn) { btn.disabled = true; btn.textContent = 'Prijevod u tijeku...'; }
 
     // Otvori modal s progress barom
-    otvoriModal(tip);
+    openModal(mode);
 
     try {
-      const res = await fetch('/api/prevedi', {
+      const res = await fetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -397,27 +422,27 @@
       const data = await res.json();
 
       // Prikaži prevedeni tekst u modalu
-      const translatedRelPath = data.izlaz;
-      await prikaziRezultat(translatedRelPath);
+      const translatedRelPath = data.output;
+      await showResult(translatedRelPath);
 
-      showToast(`Prijevod (${tip}) završen: ${data.izlaz}`, 'info');
+      showToast(`Prijevod (${mode}) završen: ${data.output}`, 'info');
     } catch (e) {
       document.getElementById('modal-status').textContent = 'Greška: ' + e.message;
       showToast('Greška: ' + e.message, 'error');
     } finally {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = tip === 'test' ? '🧪 Pokreni TEST' : '🚀 Produkcijski prijevod';
+        btn.textContent = mode === 'test' ? '🧪 Pokreni TEST' : '🚀 Produkcijski prijevod';
       }
     }
   }
 
   // ─── Modal event listeners ────────────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('modal-zatvori')?.addEventListener('click', zatvoriModal);
-    document.getElementById('modal-zatvori-dno')?.addEventListener('click', zatvoriModal);
-    document.getElementById('modal-kopiraj')?.addEventListener('click', () => {
-      const tekst = document.getElementById('modal-tekst');
+    document.getElementById('modal-close')?.addEventListener('click', closeModal);
+    document.getElementById('modal-close-bottom')?.addEventListener('click', closeModal);
+    document.getElementById('modal-copy')?.addEventListener('click', () => {
+      const tekst = document.getElementById('modal-text');
       if (tekst) {
         tekst.select();
         navigator.clipboard.writeText(tekst.value).then(() => {

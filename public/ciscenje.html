@@ -43,10 +43,10 @@
       <p class="text-gray-400 text-sm mt-1">Odaberite sirove datoteke za uklanjanje tehničkog šuma. <code class="text-green-400">[fixed]</code> datoteke se ne mogu re-čistiti.</p>
     </div>
     <div class="flex items-center gap-3">
-      <span id="odabrano-count" class="text-sm text-gray-400">Odabrano: 0</span>
+      <span id="selected-count" class="text-sm text-gray-400">Odabrano: 0</span>
       <button id="select-all" class="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors">Sve sirove</button>
       <button id="select-none" class="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors">Ništa</button>
-      <button id="btn-ocisti"
+      <button id="btn-clean"
         class="px-5 py-2 bg-green-700 hover:bg-green-600 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
         Očisti i fiksiraj
       </button>
@@ -59,15 +59,18 @@
     Svako čišćenje kreira novu <code>[fixed]</code> datoteku bez prepisivanja postojeće.
   </div>
 
+  <!-- Metapodaci odabrane knjige -->
+  <div id="metadata-container" class="hidden"></div>
+
   <div class="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
     <table id="output-table" class="w-full text-sm border-collapse">
       <thead class="bg-slate-900 text-gray-400 text-xs uppercase tracking-wider">
         <tr>
           <th class="py-3 px-3 w-8"></th>
-          <th class="py-3 px-3 text-left" data-sort="ime">Datoteka</th>
+          <th class="py-3 px-3 text-left" data-sort="name">Datoteka</th>
           <th class="py-3 px-3 text-left" data-sort="status">Status</th>
-          <th class="py-3 px-3 text-left" data-sort="velicina">Veličina</th>
-          <th class="py-3 px-3 text-left" data-sort="izmijenjeno">Datum izmjene</th>
+          <th class="py-3 px-3 text-left" data-sort="size">Veličina</th>
+          <th class="py-3 px-3 text-left" data-sort="modified">Datum izmjene</th>
         </tr>
       </thead>
       <tbody id="output-tbody">
@@ -78,12 +81,58 @@
 
 </main>
 
+<!-- Modal: Progress čišćenja -->
+<div id="cleaning-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm">
+  <div class="bg-slate-800 border border-slate-600 rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col">
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+      <div>
+        <h3 class="text-lg font-bold text-white" id="cleaning-modal-title">🧹 Čišćenje u tijeku...</h3>
+        <p class="text-xs text-green-400 font-semibold mt-0.5" id="cleaning-modal-status">Priprema datoteka...</p>
+      </div>
+      <button id="cleaning-modal-close" class="text-gray-400 hover:text-white text-2xl leading-none px-2 py-1 rounded hover:bg-slate-700 transition-colors">&times;</button>
+    </div>
+
+    <!-- Tijelo -->
+    <div class="px-6 py-5 flex-1 overflow-y-auto">
+      <!-- Progress bar -->
+      <div class="mb-4">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-sm text-gray-300" id="cleaning-modal-progress-text">0%</span>
+          <span class="text-xs text-gray-500" id="cleaning-modal-progress-details">Datoteka 0/0</span>
+          <span class="text-xs text-green-400 font-semibold" id="cleaning-modal-progress-eta"></span>
+        </div>
+        <div class="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
+          <div id="cleaning-modal-progress-bar" class="bg-green-500 h-full rounded-full transition-all duration-300" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Rezultat (prikazuje se nakon završetka) -->
+      <div id="cleaning-modal-result" class="hidden">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-semibold text-green-400">✅ Čišćenje završeno</span>
+        </div>
+        <p class="text-sm text-gray-300" id="cleaning-modal-summary"></p>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="px-6 py-4 border-t border-slate-700 flex justify-end gap-3">
+      <button id="cleaning-modal-close-bottom"
+        class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors">
+        Zatvri
+      </button>
+    </div>
+  </div>
+</div>
+
 <div class="max-w-7xl mx-auto px-6 pb-8">
   <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Live Log Console</h2>
   <div id="live-console" class="bg-black text-green-400 p-4 font-mono text-xs h-48 overflow-y-auto rounded-lg shadow-inner border border-gray-800"></div>
 </div>
 
-<script src="/js/main.js"></script>
-<script src="/js/ciscenje.js"></script>
+<script src="/js/main.js?v=2"></script>
+<script src="/js/metadata.js?v=2"></script>
+<script src="/js/ciscenje.js?v=2"></script>
 </body>
 </html>

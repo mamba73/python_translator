@@ -67,6 +67,9 @@
         </select>
       </div>
 
+      <!-- Metapodaci odabrane knjige -->
+      <div id="metadata-container" class="hidden"></div>
+
       <!-- Gumbi akcije -->
       <div class="bg-slate-800 border border-slate-700 rounded-xl p-5">
         <div class="text-sm font-medium text-gray-300 mb-3">Pokretanje prijevoda</div>
@@ -75,7 +78,7 @@
             class="flex-1 px-4 py-3 bg-yellow-600 hover:bg-yellow-500 text-white font-semibold text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
             🧪 Pokreni TEST
           </button>
-          <button id="btn-produkcija"
+          <button id="btn-production"
             class="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
             🚀 Produkcijski prijevod
           </button>
@@ -104,9 +107,9 @@
       <div>
         <div class="flex justify-between items-center mb-2">
           <label class="text-sm text-gray-300">Testnih odlomaka</label>
-          <span id="kolicina-val" class="text-blue-400 font-bold text-sm w-8 text-right">1</span>
+          <span id="count-val" class="text-blue-400 font-bold text-sm w-8 text-right">1</span>
         </div>
-        <input id="kolicina-slider" type="range" min="1" max="100" value="1" class="w-full">
+        <input id="count-slider" type="range" min="1" max="100" value="1" class="w-full">
         <div class="flex justify-between text-xs text-gray-600 mt-1"><span>1</span><span>50</span><span>100</span></div>
       </div>
 
@@ -126,7 +129,7 @@
       <!-- Dropdown: Granularnost -->
       <div>
         <label class="block text-sm text-gray-300 mb-1.5">Granularnost segmentacije</label>
-        <select id="granularnost-select"
+        <select id="granularity-select"
           class="w-full bg-gray-900 border border-gray-600 text-gray-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 appearance-none cursor-pointer">
           <option value="paragraph">Odlomak (Paragraph)</option>
           <option value="sentence">Rečenica (Sentence)</option>
@@ -136,7 +139,7 @@
       <!-- Dropdown: Profil knjige -->
       <div>
         <label class="block text-sm text-gray-300 mb-1.5">Konfiguracijski profil knjige</label>
-        <select id="profil-select"
+        <select id="profile-select"
           class="w-full bg-gray-900 border border-gray-600 text-gray-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 appearance-none cursor-pointer">
           <option value="">Učitavanje profila...</option>
         </select>
@@ -153,16 +156,16 @@
 </div>
 
 <!-- Modal: Progress prijevoda -->
-<div id="prevod-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm">
+<div id="translation-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm">
   <div class="bg-slate-800 border border-slate-600 rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col">
     <!-- Header -->
     <div class="flex items-center justify-between px-6 py-4 border-b border-slate-700">
       <div>
-        <h3 class="text-lg font-bold text-white" id="modal-naslov">Prijevod u tijeku...</h3>
+        <h3 class="text-lg font-bold text-white" id="modal-title">Prijevod u tijeku...</h3>
         <p class="text-xs text-blue-400 font-semibold mt-0.5" id="modal-model-name"></p>
         <p class="text-xs text-gray-400 mt-0.5" id="modal-status">Priprema segmenata...</p>
       </div>
-      <button id="modal-zatvori" class="text-gray-400 hover:text-white text-2xl leading-none px-2 py-1 rounded hover:bg-slate-700 transition-colors">&times;</button>
+      <button id="modal-close" class="text-gray-400 hover:text-white text-2xl leading-none px-2 py-1 rounded hover:bg-slate-700 transition-colors">&times;</button>
     </div>
 
     <!-- Tijelo -->
@@ -170,34 +173,34 @@
       <!-- Progress bar -->
       <div class="mb-4">
         <div class="flex justify-between items-center mb-2">
-          <span class="text-sm text-gray-300" id="modal-progress-tekst">0%</span>
-          <span class="text-xs text-gray-500" id="modal-progress-detalji">Segment 0/0</span>
+          <span class="text-sm text-gray-300" id="modal-progress-text">0%</span>
+          <span class="text-xs text-gray-500" id="modal-progress-details">Segment 0/0</span>
           <span class="text-xs text-blue-400 font-semibold" id="modal-progress-eta"></span>
         </div>
         <div class="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
           <div id="modal-progress-bar" class="bg-blue-500 h-full rounded-full transition-all duration-300" style="width: 0%"></div>
         </div>
-        <div class="text-xs text-gray-500 mt-1.5" id="modal-progress-rijeci"></div>
+        <div class="text-xs text-gray-500 mt-1.5" id="modal-progress-words"></div>
       </div>
 
       <!-- Prevedeni tekst (prikazuje se nakon završetka) -->
-      <div id="modal-rezultat" class="hidden">
+      <div id="modal-result" class="hidden">
         <div class="flex items-center justify-between mb-2">
           <span class="text-sm font-semibold text-green-400">✅ Prijevod završen</span>
-          <span class="text-xs text-gray-500" id="modal-ime-datoteke"></span>
+          <span class="text-xs text-gray-500" id="modal-file-name"></span>
         </div>
-        <textarea id="modal-tekst" readonly
+        <textarea id="modal-text" readonly
           class="w-full bg-gray-900 border border-gray-600 text-gray-200 text-sm rounded-lg p-3 h-64 font-mono focus:outline-none focus:border-blue-500 resize-y"></textarea>
       </div>
     </div>
 
     <!-- Footer -->
     <div class="px-6 py-4 border-t border-slate-700 flex justify-end gap-3">
-      <button id="modal-zatvori-dno"
+      <button id="modal-close-bottom"
         class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors">
-        Zatvori
+        Zatvri
       </button>
-      <button id="modal-kopiraj"
+      <button id="modal-copy"
         class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors hidden">
         📋 Kopiraj
       </button>
@@ -205,8 +208,9 @@
   </div>
 </div>
 
-<script src="/js/main.js"></script>
-<script src="/js/prevod.js"></script>
+<script src="/js/main.js?v=2"></script>
+<script src="/js/metadata.js?v=2"></script>
+<script src="/js/prevod.js?v=2"></script>
 <script>
   // Toggle label ažuriranje
   document.getElementById('header-toggle')?.addEventListener('change', function() {

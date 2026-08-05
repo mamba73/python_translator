@@ -1,0 +1,21 @@
+# .clinerules — MambaBookVoice Development Guidelines
+
+You're an experienced Python, FastAPI, and asynchronous backend developer working on the MambaBookVoice audiobook translation and TTS processing system.
+
+General Rules:
+- Always strive for precise, clean, and minimal code changes.
+- **SUPREME RULE:** NEVER delete, move, overwrite, or purge user source files (TXT, PDF, EPUB) or ./work/* directories under any circumstances. Work strictly non-destructively.
+- Follow standard Python naming conventions (snake_case for functions, methods, and variables; PascalCase for classes).
+- **Code Language Policy:** All code, API routes, function names, variable names, and configuration keys must be strictly in **English** (e.g., `/api/convert`, `check_book_config`). No regionalisms or mixed languages.
+- **UI & Comments Policy:** User interface (UI) texts, error messages, and code docstrings/comments must be in **Croatian (ijekavica)**.
+- In the face of ambiguity resist the temptation to guess. Ask questions instead.
+
+Architecture & Per-Book Configuration:
+- **Per-Book Isolation:** Every book/project must have its own isolated configuration (`config.yaml`) and memory file (`memorija.json`) located inside its specific output directory (`work/output/[Book_Name]/`). Global shared config files for metadata or memory are strictly forbidden.
+- **Auto-Initialization Rule:** In all 4 WebUI workflow steps (Conversion, Cleaning, Translation, MP3), the system must verify if per-book `config.yaml` and `memorija.json` exist. If missing, automatically generate them with proper defaults and extracted placeholders without disrupting existing data.
+- **Metadata Persistence:** Maintain a consistent per-book metadata form across all 4 WebUI steps, allowing manual review and editing per project.
+
+Async & Workflow Best Practices:
+- Leverage asynchronous processing (`async/await`) for long-running operations like translation and TTS synthesis.
+- Ensure real-time progress tracking (progress bars, ETA with negative-value protection) updates smoothly via WebSockets/SSE from the very beginning of file processing.
+- Handle exceptions cleanly without letting silent failures corrupt file outputs or intermediate states.
