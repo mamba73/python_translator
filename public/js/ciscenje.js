@@ -270,6 +270,23 @@
         document.getElementById('cleaning-modal-result').classList.remove('hidden');
         document.getElementById('cleaning-modal-title').textContent = '✅ Čišćenje završeno';
 
+        // Prikaži informacije o izlaznoj putanji i datoteci (prva uspješna)
+        const firstOk = (data.results || []).find(r => r.status === 'ok');
+        if (firstOk) {
+          const dirEl = document.getElementById('cleaning-modal-output-dir');
+          const fileEl = document.getElementById('cleaning-modal-output-file');
+          const infoEl = document.getElementById('cleaning-modal-output-info');
+          if (dirEl && firstOk.output_dir) {
+            dirEl.textContent = firstOk.output_dir;
+            dirEl.title = firstOk.output_dir;
+          }
+          if (fileEl && firstOk.output) {
+            fileEl.textContent = firstOk.output;
+            fileEl.title = firstOk.output;
+          }
+          if (infoEl) infoEl.classList.remove('hidden');
+        }
+
         showToast(`Čišćenje završeno: ${ok} ok, ${err} greška.`, err > 0 ? 'warn' : 'info');
         selectedSet.clear();
         await loadFiles();

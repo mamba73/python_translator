@@ -131,6 +131,20 @@
         <div class="text-xs text-gray-500 mt-1.5" id="tts-modal-progress-info"></div>
       </div>
 
+      <!-- Lokacija izlazne datoteke (prikazuje se nakon završetka) -->
+      <div id="tts-modal-output-info" class="hidden">
+        <div class="bg-slate-900 border border-slate-600 rounded-lg p-3 space-y-1.5">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider w-16">Mapa:</span>
+            <span class="text-xs text-gray-300 font-mono truncate" id="tts-modal-output-dir" title=""></span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider w-16">Datoteke:</span>
+            <span class="text-xs text-blue-400 font-mono truncate" id="tts-modal-output-file" title=""></span>
+          </div>
+        </div>
+      </div>
+
       <!-- Rezultat (prikazuje se nakon završetka) -->
       <div id="tts-modal-result" class="hidden">
         <div class="flex items-center justify-between mb-2">

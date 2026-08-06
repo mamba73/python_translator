@@ -491,7 +491,9 @@ async def api_convert(req: ConvertRequest):
                                 f"Konverzija {processed + 1}/{total_files}",
                                 f"Završeno: {output_path.name}")
                 results.append({
-                    "file": rel_path, "status": "ok", "output": str(output_path.name),
+                    "file": rel_path, "status": "ok",
+                    "output": str(output_path.name),
+                    "output_dir": str(output_path.parent),
                     "title": book_title, "author": author
                 })
             except Exception as e:
@@ -586,7 +588,11 @@ async def api_clean(req: CleanRequest):
                 except Exception as meta_err:
                     logging.warning(f"[METADATA] Greška pri kopiranju metapodataka tijekom čišćenja: {meta_err}")
                 logging.info(f"[ČIŠĆENJE] Završeno: {output_path.name}")
-                results.append({"file": rel_path, "status": "ok", "output": output_path.name})
+                results.append({
+                    "file": rel_path, "status": "ok",
+                    "output": output_path.name,
+                    "output_dir": str(output_path.parent)
+                })
             except Exception as e:
                 logging.error(f"[ČIŠĆENJE] Greška {rel_path}: {e}")
                 results.append({"file": rel_path, "status": "error", "message": str(e)})
@@ -868,10 +874,20 @@ async def api_translate(req: TranslateRequest):
                     copy_metadata_to_target(file_path, output_path, INPUT_DIR, OUTPUT_DIR, TRANSLATED_DIR)
                 except Exception as meta_err:
                     logging.warning(f"[METADATA] Greška pri kopiranju metapodataka tijekom prijevoda (test): {meta_err}")
-                return str(output_path.relative_to(TRANSLATED_DIR)).replace("\\", "/")
+                return {
+                    "rel_path": str(output_path.relative_to(TRANSLATED_DIR)).replace("\\", "/"),
+                    "output_dir": str(output_path.parent.relative_to(TRANSLATED_DIR)).replace("\\", "/"),
+                    "filename": output_path.name
+                }
 
-            rel_output = await asyncio.to_thread(_run_test)
-            return JSONResponse({"status": "ok", "output": rel_output, "mode": "test"})
+            result = await asyncio.to_thread(_run_test)
+            return JSONResponse({
+                "status": "ok",
+                "output": result["rel_path"],
+                "output_dir": result["output_dir"],
+                "filename": result["filename"],
+                "mode": "test"
+            })
         else:
             def _run_production():
                 translated_book_dir = fm.ensure_dir(
@@ -896,10 +912,21 @@ async def api_translate(req: TranslateRequest):
                     logging.warning(f"[METADATA] Greška pri kopiranju metapodataka tijekom prijevoda (produkcija): {meta_err}")
                 status = "interrupted" if is_interrupted else "ok"
                 logging.info(f"[PRIJEVOD] Završen produkcijski: {output_path.name} (status={status})")
-                return str(output_path.relative_to(TRANSLATED_DIR)).replace("\\", "/"), status
+                return {
+                    "rel_path": str(output_path.relative_to(TRANSLATED_DIR)).replace("\\", "/"),
+                    "output_dir": str(output_path.parent.relative_to(TRANSLATED_DIR)).replace("\\", "/"),
+                    "filename": output_path.name,
+                    "status": status
+                }
 
-            rel_output, status = await asyncio.to_thread(_run_production)
-            return JSONResponse({"status": status, "output": rel_output, "mode": "production"})
+            result = await asyncio.to_thread(_run_production)
+            return JSONResponse({
+                "status": result["status"],
+                "output": result["rel_path"],
+                "output_dir": result["output_dir"],
+                "filename": result["filename"],
+                "mode": "production"
+            })
 
     except HTTPException:
         raise
@@ -1055,6 +1082,7 @@ async def api_generate_mp3(req: TTSRequest):
         return JSONResponse({
             "status": "ok",
             "output": str(audiobook_dir.name),
+            "output_dir": str(audiobook_dir),
             "mp3_count": mp3_count
         })
 

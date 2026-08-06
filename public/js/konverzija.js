@@ -274,6 +274,23 @@
         document.getElementById('conversion-modal-result').classList.remove('hidden');
         document.getElementById('conversion-modal-title').textContent = '✅ Konverzija završena';
 
+        // Prikaži informacije o izlaznoj putanji i datoteci (prva uspješna)
+        const firstOk = (data.results || []).find(r => r.status === 'ok');
+        if (firstOk) {
+          const dirEl = document.getElementById('conversion-modal-output-dir');
+          const fileEl = document.getElementById('conversion-modal-output-file');
+          const infoEl = document.getElementById('conversion-modal-output-info');
+          if (dirEl && firstOk.output_dir) {
+            dirEl.textContent = firstOk.output_dir;
+            dirEl.title = firstOk.output_dir;
+          }
+          if (fileEl && firstOk.output) {
+            fileEl.textContent = firstOk.output;
+            fileEl.title = firstOk.output;
+          }
+          if (infoEl) infoEl.classList.remove('hidden');
+        }
+
         showToast(`Konverzija završena: ${ok} ok, ${err} greška.`, err > 0 ? 'warn' : 'info');
         await loadFiles();
       } catch (e) {

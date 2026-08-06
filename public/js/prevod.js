@@ -425,6 +425,22 @@
       const translatedRelPath = data.output;
       await showResult(translatedRelPath);
 
+      // Prikaži informacije o izlaznoj putanji i datoteci
+      const outputDirEl = document.getElementById('modal-output-dir');
+      const outputFileEl = document.getElementById('modal-output-file');
+      const outputInfoEl = document.getElementById('modal-output-info');
+      if (outputDirEl && data.output_dir) {
+        outputDirEl.textContent = data.output_dir;
+        outputDirEl.title = data.output_dir;
+      }
+      if (outputFileEl && data.filename) {
+        outputFileEl.textContent = data.filename;
+        outputFileEl.title = data.filename;
+      }
+      if (outputInfoEl) {
+        outputInfoEl.classList.remove('hidden');
+      }
+
       showToast(`Prijevod (${mode}) završen: ${data.output}`, 'info');
     } catch (e) {
       document.getElementById('modal-status').textContent = 'Greška: ' + e.message;

@@ -321,6 +321,23 @@
       if (folderEl && !folderEl.textContent) {
         folderEl.textContent = data.output;
       }
+
+      // Prikaži informacije o izlaznoj putanji i datoteci
+      const outputDirEl = document.getElementById('tts-modal-output-dir');
+      const outputFileEl = document.getElementById('tts-modal-output-file');
+      const outputInfoEl = document.getElementById('tts-modal-output-info');
+      if (outputDirEl && data.output_dir) {
+        outputDirEl.textContent = data.output_dir;
+        outputDirEl.title = data.output_dir;
+      }
+      if (outputFileEl && data.mp3_count !== undefined) {
+        outputFileEl.textContent = `${data.mp3_count} MP3 datoteka`;
+        outputFileEl.title = `${data.mp3_count} MP3 datoteka`;
+      }
+      if (outputInfoEl) {
+        outputInfoEl.classList.remove('hidden');
+      }
+
       const resultEl = document.getElementById('tts-modal-result');
       if (resultEl && resultEl.classList.contains('hidden')) {
         resultEl.classList.remove('hidden');

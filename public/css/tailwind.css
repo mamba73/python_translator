@@ -358,9 +358,16 @@ img, video { max-width: 100%; height: auto; }
 .appearance-none { appearance: none; -webkit-appearance: none; }
 
 /* === CUSTOM COMPONENTS === */
-/* Progress bar */
-.progress-bar { height: 0.5rem; border-radius: 9999px; background-color: #1e40af; overflow: hidden; }
-.progress-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #22d3ee); border-radius: 9999px; transition: width 0.5s ease; }
+/* Progress bar — used by modals via inline Tailwind classes */
+.progress-bar { height: 0.5rem; border-radius: 9999px; background-color: #374151; overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #22d3ee); border-radius: 9999px; transition: width 0.3s ease; }
+
+/* Modal output info truncation */
+.modal-output-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Toggle switch */
 .toggle-container { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
