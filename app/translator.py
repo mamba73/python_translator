@@ -78,6 +78,11 @@ class Translator:
         `likovi_memorija.json` koristi `[ime_knjige]_memorija.json` (npr.
         `Foundation---Isaac-Asimov_memorija.json`).
 
+        Također spaja per-book parametre iz config.yaml (parameters) u
+        efektivnu translation konfiguraciju, tako da per-book vrijednosti
+        (temperature, top_p, top_k, min_p, max_tokens, repeat_penalty,
+        thinking_config) imaju prioritet nad globalnim settings.yaml.
+
         Args:
             book_dir: Putanja do direktorija knjige (work/output/<Knjiga>/).
             book_config: Per-book config.yaml (opcionalno; sadrži system_prompt
@@ -94,6 +99,25 @@ class Translator:
             self._memorija_file = book_config.get("memorija_file")
             self._book_title = book_config.get("book_title", Path(book_dir).name)
             self._book_author = book_config.get("author", "Unknown")
+
+            # Per-book parametri (parameters) imaju prioritet nad globalnim
+            book_params = book_config.get("parameters") or {}
+            if book_params:
+                merged_trans = dict(self._trans_cfg)
+                for key, value in book_params.items():
+                    if key == "thinking_config":
+                        # Rekurzivno spoji thinking_config
+                        tc_merged = dict(merged_trans.get("thinking_config") or {})
+                        tc_merged.update(value or {})
+                        merged_trans["thinking_config"] = tc_merged
+                    else:
+                        merged_trans[key] = value
+                self._trans_cfg = merged_trans
+
+            # Per-book api_parameters lista (ako postoji) ima prioritet
+            book_api_params = book_config.get("api_parameters")
+            if book_api_params:
+                self._trans_cfg["api_parameters"] = book_api_params
 
         memorija_putanja = self._pronadi_memorija_datoteku(book_dir, self._memorija_file)
 
@@ -646,32 +670,72 @@ class Translator:
         finally:
             self._current_provider_cfg["model"] = original_model
 
+    def _dohvati_api_parametre(self) -> list[str]:
+        """Dohvaća listu API parametara iz konfiguracije (settings.yaml / config.yaml).
+
+        Prioritet ima per-book `api_parameters` lista; inače se koristi
+        globalna lista iz settings.yaml; u krajnjem slučaju default lista.
+
+        Returns:
+            Lista imena API parametara.
+        """
+        api_params = self._trans_cfg.get("api_parameters", [])
+        if api_params:
+            return list(api_params)
+        return [
+            "temperature", "max_tokens", "top_p", "min_p",
+            "top_k", "repeat_penalty", "thinking_config"
+        ]
+
     def _build_payload(self, messages: list[dict[str, str]]) -> dict[str, Any]:
-        """Gradi API payload na temelju konfiguracije."""
+        """Gradi API payload na temelju konfiguracije.
+
+        Koristi dinamičku listu `api_parameters` iz settings.yaml (ili
+        per-book config.yaml) da odredi koje ključeve iz translation bloka
+        uključiti u API payload. Novi parametri dodani u YAML automatski
+        ulaze u payload bez promjene koda.
+        """
         payload: dict[str, Any] = {
             "messages": messages,
-            "temperature": self._trans_cfg.get("temperature", 0.25),
-            "max_tokens": self._trans_cfg.get("max_tokens", 4000),
-            "top_p": self._trans_cfg.get("top_p", 0.80),
-            "top_k": self._trans_cfg.get("top_k", 15),
-            "min_p": self._trans_cfg.get("min_p", 0.05),
-            "repeat_penalty": self._trans_cfg.get("repeat_penalty", 1.20),
             "stream": False
         }
 
-        # Provider-specific parametri za onemogućavanje razmišljanja (reasoning/thinking)
+        api_parameters = self._dohvati_api_parametre()
+
+        # Dinamički učitaj samo API parametre definirane u api_parameters listi
+        for key in api_parameters:
+            if key not in self._trans_cfg:
+                continue
+
+            value = self._trans_cfg[key]
+
+            # Map parameters if needed for specific providers
+            if self._provider_name == "gemini":
+                if key == "max_tokens":
+                    if "generationConfig" not in payload: payload["generationConfig"] = {}
+                    payload["generationConfig"]["maxOutputTokens"] = value
+                    continue
+                if key == "thinking_config":
+                    if "generationConfig" not in payload: payload["generationConfig"] = {}
+                    payload["generationConfig"]["thinkingConfig"] = {
+                        "includeThinkingConfig": value.get("include_thinking_config", True),
+                        "thinkingBudget": value.get("thinking_budget", 0)
+                    }
+                    continue
+
+            payload[key] = value
+
+        # Provider-specific overrides for reasoning/thinking if disabled
         if self._trans_cfg.get("disable_reasoning", True):
             if self._provider_name in ("lmstudio", "ollama", "openai"):
-                # OpenAI-kompatibilni provideri
                 payload["reasoning"] = False
                 payload["thinking"] = False
             elif self._provider_name == "gemini":
-                # Gemini koristi generationConfig za thinking kontrolu
                 if "generationConfig" not in payload:
                     payload["generationConfig"] = {}
-                payload["generationConfig"]["thinkingConfig"] = {
-                    "thinkingBudget": 0
-                }
+                if "thinkingConfig" not in payload["generationConfig"]:
+                    payload["generationConfig"]["thinkingConfig"] = {}
+                payload["generationConfig"]["thinkingConfig"]["thinkingBudget"] = 0
 
         return payload
 
@@ -749,13 +813,18 @@ class Translator:
             elif role == "assistant":
                 gemini_contents.append({"role": "model", "parts": [{"text": content}]})
 
+        # Use unificirani payload builder and adapt it for Gemini
+        base_payload = self._build_payload(messages)
+        
         payload: dict[str, Any] = {
             "contents": gemini_contents,
-            "generationConfig": {
-                "temperature": self._trans_cfg.get("temperature", 0.25),
-                "maxOutputTokens": self._trans_cfg.get("max_tokens", 4000),
-            }
+            "generationConfig": base_payload.get("generationConfig", {})
         }
+
+        # Add other parameters that might be in base_payload but not in generationConfig
+        for k, v in base_payload.items():
+            if k not in ("messages", "stream", "generationConfig", "contents", "systemInstruction"):
+                payload["generationConfig"][k] = v
 
         if system_instruction:
             payload["systemInstruction"] = system_instruction
@@ -932,52 +1001,51 @@ class Translator:
         detalji = self.dohvati_detalje_modela()
         model_name = detalji.get("model", "") or self.detektiraj_aktivni_model() or "Nepoznat"
 
+        # Dinamički izgradi parametre iz api_parameters liste iz konfiguracije
+        # (settings.yaml ili per-book config.yaml) — bez hardkodiranja.
+        # thinking_config se prikazuje zasebno u vlastitoj liniji.
+        api_parameters = self._dohvati_api_parametre()
+        params = []
+        for key in api_parameters:
+            if key == "thinking_config" or key not in self._trans_cfg:
+                continue
+            value = self._trans_cfg[key]
+            # Uredan naziv: max_tokens -> Max tokens, top_p -> Top-p, itd.
+            label = key.replace("_", " ").title().replace("Top P", "Top-p").replace("Top K", "Top-k")
+            params.append(f"{label}: {value}")
+
+        # Podijeli parametre uredno u DVIJE linije
+        mid = (len(params) + 1) // 2
+        line1_params = " | ".join(params[:mid]) if params else "—"
+        line2_params = " | ".join(params[mid:]) if params[mid:] else "—"
+
         lines = [
             "=" * 80,
             f"TEST PRIJEVOD — Dynamic Book Translator v{self._cfg.get('project', {}).get('version', '0.4.0')}",
             "=" * 80,
-            f"Vrijeme: {timestamp}",
-            f"Granularnost: {granularnost}",
-            f"Količina: {kolicina} segmenata",
-            f"Provider: {self._provider_name}",
-            f"Model: {model_name}",
+            f"Vrijeme: {timestamp} | Granularnost: {granularnost} | Količina: {kolicina} segm.",
+            f"Provider: {self._provider_name} | Model: {model_name}",
         ]
 
         # Dodaj detalje modela ako su dostupni
-        parametri = detalji.get("parametri", "")
-        quantization = detalji.get("quantization", "")
-        context_length = detalji.get("context_length", "")
-        size = detalji.get("size", "")
-        owned_by = detalji.get("owned_by", "")
+        extra_info = []
+        if detalji.get("parametri"): extra_info.append(f"Parametri: {detalji['parametri']}")
+        if detalji.get("quantization"): extra_info.append(f"Quant: {detalji['quantization']}")
+        if detalji.get("context_length"): extra_info.append(f"Context: {detalji['context_length']}")
+        
+        if extra_info:
+            lines.append(" | ".join(extra_info))
 
-        if parametri:
-            lines.append(f"Parametri: {parametri}")
-        if quantization:
-            lines.append(f"Quantization: {quantization}")
-        if context_length:
-            lines.append(f"Context length: {context_length}")
-        if size:
-            # Pretvori bytes u čitljiv format
-            try:
-                size_bytes = int(size)
-                if size_bytes >= 1024 * 1024 * 1024:
-                    size_str = f"{size_bytes / (1024**3):.1f} GB"
-                elif size_bytes >= 1024 * 1024:
-                    size_str = f"{size_bytes / (1024**2):.1f} MB"
-                else:
-                    size_str = f"{size_bytes / 1024:.1f} KB"
-                lines.append(f"Veličina modela: {size_str}")
-            except (ValueError, TypeError):
-                lines.append(f"Veličina modela: {size}")
-        if owned_by:
-            lines.append(f"Owned by: {owned_by}")
+        # Dodaj parametre prijevoda dinamički
+        lines.append("-" * 80)
+        lines.append(line1_params)
+        lines.append(line2_params)
+        
+        # Thinking config if present
+        thinking = self._trans_cfg.get("thinking_config", {})
+        if thinking and thinking.get("thinking_budget", 0) > 0:
+            lines.append(f"Thinking: Level {thinking.get('thinking_level', 'N/A')} | Budget: {thinking.get('thinking_budget')} tokens")
 
-        # Dodaj parametre prijevoda
-        lines.append("=" * 80)
-        lines.append(f"Temperature: {self._trans_cfg.get('temperature', 0.25)} | "
-                     f"Top-p: {self._trans_cfg.get('top_p', 0.80)} | "
-                     f"Top-k: {self._trans_cfg.get('top_k', 15)} | "
-                     f"Max tokens: {self._trans_cfg.get('max_tokens', 4000)}")
         lines.append("=" * 80)
         lines.append("")
 

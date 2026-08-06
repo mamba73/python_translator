@@ -6,12 +6,16 @@
 _profile: "sf_literature"
 
 parameters:
-  temperature:    0.25
-  top_p:          0.80
-  top_k:          15
-  min_p:          0.05
-  max_tokens:     4096
-  repeat_penalty: 1.10
+  temperature: 0.25
+  top_p: 0.8
+  top_k: 15
+  min_p: 0.05
+  max_tokens: 4096
+  repeat_penalty: 1.1
+  thinking_config:
+    include_thinking_config: true
+    thinking_level: 0
+    thinking_budget: 0
 
 chunking:
   max_tokens_per_chunk: 1500

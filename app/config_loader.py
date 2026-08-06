@@ -305,6 +305,16 @@ def create_book_config(book_dir: Path | str,
     profile = load_profile(profile_name)
     now = datetime.now().isoformat(timespec="seconds")
 
+    # Učitaj globalnu konfiguraciju za api_parameters listu
+    try:
+        global_cfg = load_global_config()
+        api_parameters = global_cfg.get("translation", {}).get("api_parameters", [])
+    except Exception:
+        api_parameters = [
+            "temperature", "max_tokens", "top_p", "min_p",
+            "top_k", "repeat_penalty", "thinking_config"
+        ]
+
     book_cfg: dict[str, Any] = {
         "book_title":    book_title,
         "author":        author,
@@ -316,6 +326,7 @@ def create_book_config(book_dir: Path | str,
         "api_key_override": "",
         "system_prompt": profile.get("system_prompt", ""),
         "parameters":    profile.get("parameters", {}),
+        "api_parameters": api_parameters,
         "chunking":      profile.get("chunking", {}),
         "memorija_file": f"{_sanitize_filename(book_title)}_memorija.json",
         "enable_reasoning": profile.get("enable_reasoning", False),

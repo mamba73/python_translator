@@ -238,7 +238,33 @@ class TextCleaner:
 
         from datetime import datetime
 
-        return {
+        # Dinamički izgradi parametre na temelju api_parameters liste
+        # (ili default liste ako api_parameters nije definirana)
+        api_parameters = trans_cfg.get("api_parameters") or [
+            "temperature", "top_p", "top_k", "min_p",
+            "max_tokens", "repeat_penalty", "thinking_config"
+        ]
+        defaults = {
+            "temperature": 0.25,
+            "top_p": 0.80,
+            "top_k": 15,
+            "min_p": 0.05,
+            "max_tokens": 4000,
+            "repeat_penalty": 1.20,
+            "thinking_config": {
+                "include_thinking_config": True,
+                "thinking_level": 0,
+                "thinking_budget": 0
+            }
+        }
+        parameters = {}
+        for key in api_parameters:
+            if key in trans_cfg:
+                parameters[key] = trans_cfg[key]
+            elif key in defaults:
+                parameters[key] = defaults[key]
+
+        book_cfg = {
             "book_title": book_title,
             "author": author,
             "api_provider": api_cfg.get("provider", "gemini"),
@@ -248,14 +274,8 @@ class TextCleaner:
                 "default_system_prompt",
                 "Ti si stručni prevoditelj s engleskog na hrvatski. Prevedi sljedeći tekst zadržavajući stil i ton originala."
             ),
-            "parameters": {
-                "temperature": trans_cfg.get("temperature", 0.25),
-                "top_p": trans_cfg.get("top_p", 0.80),
-                "top_k": trans_cfg.get("top_k", 15),
-                "min_p": trans_cfg.get("min_p", 0.05),
-                "max_tokens": trans_cfg.get("max_tokens", 4000),
-                "repeat_penalty": trans_cfg.get("repeat_penalty", 1.20)
-            },
+            "parameters": parameters,
+            "api_parameters": list(api_parameters),
             "config_type": "Profil A: Knjizevna SF literatura",
             "chunking": {
                 "max_tokens_per_chunk": 1500,
@@ -265,3 +285,4 @@ class TextCleaner:
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
         }
+        return book_cfg
