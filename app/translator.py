@@ -203,6 +203,31 @@ class Translator:
     # Javne metode za prevođenje
     # -----------------------------------------------------------------------
 
+    def _ocisti_razmisljanje(self, tekst: str) -> str:
+        """Uklanja LLM thinking/reasoning tagove iz odgovora.
+
+        Koristi regex s DOTALL flagom za uklanjanje:
+        - blokove
+        - <thought>...</thought> blokove
+
+        Args:
+            tekst: Čisti tekst s potencijalnim thinking tagovima.
+
+        Returns:
+            Očišćeni tekst bez thinking tagova.
+        """
+        if not tekst:
+            return tekst
+
+        # Ukloni  (multiline, DOTALL)
+        tekst = re.sub(r'<think>.*?', '', tekst, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Ukloni <thought>...</thought> (multiline, DOTALL)
+        tekst = re.sub(r'<thought>.*?</thought>', '', tekst, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Očisti višak praznih redova i vrati stripped rezultat
+        return tekst.strip()
+
     def prevedi_segment(self, tekst: str, system_prompt: str | None = None) -> str:
         """Unificirana metoda za prevođenje segmenta (odlomak/paragraf/rečenica).
 
@@ -236,7 +261,10 @@ class Translator:
             ]
         )
 
-        # Post-processing
+        # Post-processing: očisti thinking tagove PRIJE standardnog čišćenja
+        response = self._ocisti_razmisljanje(response)
+        
+        # Standardno post-processing
         response = unificiraj_navodnike(response)
         response = ocisti_leaked_prijevod(response)
 
@@ -620,7 +648,7 @@ class Translator:
 
     def _build_payload(self, messages: list[dict[str, str]]) -> dict[str, Any]:
         """Gradi API payload na temelju konfiguracije."""
-        payload = {
+        payload: dict[str, Any] = {
             "messages": messages,
             "temperature": self._trans_cfg.get("temperature", 0.25),
             "max_tokens": self._trans_cfg.get("max_tokens", 4000),
@@ -631,9 +659,19 @@ class Translator:
             "stream": False
         }
 
+        # Provider-specific parametri za onemogućavanje razmišljanja (reasoning/thinking)
         if self._trans_cfg.get("disable_reasoning", True):
-            payload["reasoning"] = False
-            payload["thinking"] = False
+            if self._provider_name in ("lmstudio", "ollama", "openai"):
+                # OpenAI-kompatibilni provideri
+                payload["reasoning"] = False
+                payload["thinking"] = False
+            elif self._provider_name == "gemini":
+                # Gemini koristi generationConfig za thinking kontrolu
+                if "generationConfig" not in payload:
+                    payload["generationConfig"] = {}
+                payload["generationConfig"]["thinkingConfig"] = {
+                    "thinkingBudget": 0
+                }
 
         return payload
 
@@ -866,10 +904,21 @@ class Translator:
 
     def _generiraj_default_system_prompt(self) -> str:
         """Generira default system prompt iz konfiguracije."""
-        return self._trans_cfg.get(
+        base_prompt = self._trans_cfg.get(
             "default_system_prompt",
             "Ti si stručni prevoditelj s engleskog na hrvatski. Prevedi dani tekst točno i prirodno."
         )
+        
+        # Dodaj eksplicitne upute protiv razmišljanja za reasoning modele
+        no_thinking_directive = (
+            "\n\nSTRICT DIRECTIVE — NO THINKING OR REASONING:\n"
+            "Do NOT perform chain-of-thought, do NOT include any thinking process, "
+            "reasoning steps, or do NOT use <thought>...</thought> tags. "
+            "Output ONLY the raw final translation directly, without any preamble, "
+            "explanation, or meta-commentary."
+        )
+        
+        return base_prompt + no_thinking_directive
 
     def _generiraj_test_header(self, kolicina: int, granularnost: str) -> str:
         """Generira header za testni prijevod s detaljima aktivnog modela.
