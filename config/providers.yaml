@@ -25,6 +25,21 @@ models:
     model: "gpt-4o"
     key_env: "OPENAI_API_KEY"
 
+  - title: "OpenAI (gpt-5.6-luna)"
+    provider: "openai"
+    model: "gpt-5.6-luna"
+    key_env: "OPENAI_API_KEY"
+
+  - title: "OpenAI (gpt-realtime-2.1-mini)"
+    provider: "openai"
+    model: "gpt-realtime-2.1-mini"
+    key_env: "OPENAI_API_KEY"
+
+  - title: "OpenAI (gpt-realtime-translate)"
+    provider: "openai"
+    model: "gpt-realtime-translate"
+    key_env: "OPENAI_API_KEY"
+
   - title: "Gemini (2.0 Flash)"
     provider: "gemini"
     model: "gemini-2.0-flash"

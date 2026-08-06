@@ -11,14 +11,14 @@ directories:
   logs: ./work/logs
   config: ./config
 api:
-  provider: lmstudio
+  provider: gemini
   auto_detect_model: true
   auto_detect_timeout: 5
   timeout: 120
   retry_max_attempts: 3
   retry_initial_delay: 10
   retry_backoff_factor: 2
-  model: local
+  model: gemini-3-flash-preview
 translation:
   default_system_prompt: Ti si stručni prevoditelj s engleskog na hrvatski. Prevedi
     ovaj tekst točno i prirodno.
@@ -36,7 +36,9 @@ translation:
   header_footer_threshold: 0.4
   test_header: true
   granularity: paragraph
-  default_count: 6
+  default_count: 1
+  thinking_config:
+    thinking_budget: 0
 sort_mode: date_desc
 text_cleaning:
   content_start_markers:
