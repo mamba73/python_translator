@@ -45,10 +45,20 @@ models:
     model: "gemini-2.0-flash"
     key_env: "GEMINI_API_KEY"
 
+  - title: "Gemini (2.0 Flash Orko)"
+    provider: "gemini"
+    model: "gemini-2.0-flash"
+    key_env: "GEMINI_API_KEY_ORKO"
+
   - title: "Gemini (3.0 Flash)"
     provider: "gemini"
     model: "gemini-3-flash-preview"
     key_env: "GEMINI_API_KEY"
+
+  - title: "Gemini (3.0 Flash Orko)"
+    provider: "gemini"
+    model: "gemini-3-flash-preview"
+    key_env: "GEMINI_API_KEY_ORKO"
 
   - title: "Qwen (DashScope Intl)"
     provider: "openai"
