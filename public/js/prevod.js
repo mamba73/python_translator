@@ -386,6 +386,74 @@
       return;
     }
 
+    // Ako je produkcijski prijevod, provjeri postoji li checkpoint
+    if (mode === 'production') {
+      try {
+        const res = await fetch(`/api/checkpoint-status?rel_path=${encodeURIComponent(relPath)}`);
+        const data = await res.json();
+        if (data.has_checkpoint) {
+          // Pitaj korisnika želi li nastaviti ili započeti novi
+          const choice = await new Promise((resolve) => {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm';
+            modal.innerHTML = `
+              <div class="bg-slate-800 border border-slate-600 rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
+                <h3 class="text-lg font-bold text-white mb-3">⏳ Nastavi prijevod?</h3>
+                <p class="text-sm text-gray-300 mb-4">
+                  Postoji spremljeni checkpoint za ovu knjigu:
+                  <span class="text-blue-400 font-semibold">${data.progress_percent}%</span> dovršeno
+                  (segment ${data.current_segment}/${data.total_segments}).
+                </p>
+                <div class="flex gap-3">
+                  <button id="resume-yes" class="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm rounded-lg transition-colors">
+                    ▶ Nastavi
+                  </button>
+                  <button id="resume-no" class="flex-1 px-4 py-3 bg-slate-700 hover:bg-slate-600 text-white font-semibold text-sm rounded-lg transition-colors">
+                    🆕 Započni novi
+                  </button>
+                  <button id="resume-cancel" class="px-4 py-3 bg-red-800 hover:bg-red-700 text-white font-semibold text-sm rounded-lg transition-colors">
+                    ✕ Odustani
+                  </button>
+                </div>
+              </div>
+            `;
+            document.body.appendChild(modal);
+
+            modal.querySelector('#resume-yes').addEventListener('click', () => {
+              modal.remove();
+              resolve('resume');
+            });
+            modal.querySelector('#resume-no').addEventListener('click', () => {
+              modal.remove();
+              resolve('fresh');
+            });
+            modal.querySelector('#resume-cancel').addEventListener('click', () => {
+              modal.remove();
+              resolve('cancel');
+            });
+          });
+
+          if (choice === 'cancel') {
+            return;
+          }
+          // Ako je izabrano resume, postavljamo resume: true
+          // Ako je fresh, idemo normalno (resume: false)
+          if (choice === 'resume') {
+            await _doTranslation(relPath, mode, true);
+            return;
+          }
+          // choice === 'fresh' → nastavi normalno ispod s resume: false
+        }
+      } catch (e) {
+        console.error('Greška pri provjeri checkpointa:', e);
+        // Nastavi normalno ako provjera padne
+      }
+    }
+
+    await _doTranslation(relPath, mode, false);
+  }
+
+  async function _doTranslation(relPath, mode, resume) {
     const slider = document.getElementById('count-slider');
     const toggle = document.getElementById('header-toggle');
     const granSelect = document.getElementById('granularity-select');
@@ -397,7 +465,8 @@
       granularity: granSelect?.value || 'paragraph',
       count: slider ? parseInt(slider.value) : 1,
       header: toggle ? toggle.checked : true,
-      profile: profileSelect?.value || 'sf_literature'
+      profile: profileSelect?.value || 'sf_literature',
+      resume: resume
     };
 
     const btnId = mode === 'test' ? 'btn-test' : 'btn-production';

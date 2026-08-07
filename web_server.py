@@ -184,6 +184,29 @@ async def api_checkpoints():
     return JSONResponse({"checkpoints": _load_checkpoints()})
 
 
+@app.get("/api/checkpoint-status")
+async def api_checkpoint_status(rel_path: str = ""):
+    """Vraća status checkpointa za odabranu knjigu.
+
+    Ako postoji checkpoint, vraća podatke o napretku i preporučuje
+    resume. Frontend može pitati korisnika želi li nastaviti.
+    """
+    if not rel_path:
+        return JSONResponse({"has_checkpoint": False})
+    book_id = f"{Path(rel_path).stem}_web"
+    for cp in _load_checkpoints():
+        if cp.get("book_id") == book_id:
+            return JSONResponse({
+                "has_checkpoint": True,
+                "book_id": book_id,
+                "current_segment": cp.get("current_segment", 0),
+                "total_segments": cp.get("total_segments", 0),
+                "progress_percent": cp.get("progress_percent", 0),
+                "output_path": cp.get("output_path", ""),
+            })
+    return JSONResponse({"has_checkpoint": False})
+
+
 # ---------------------------------------------------------------------------
 # API — Metapodaci (naslov, autor, godina, jezik)
 # ---------------------------------------------------------------------------
@@ -770,6 +793,7 @@ class TranslateRequest(BaseModel):
     count: int = 1
     header: bool = True
     profile: str = "sf_literature"
+    resume: bool = False  # True = nastavi od checkpointa
 
 
 @app.post("/api/translate")
@@ -890,6 +914,7 @@ async def api_translate(req: TranslateRequest):
             })
         else:
             def _run_production():
+                book_id = f"{book_dir.name}_web"
                 translated_book_dir = fm.ensure_dir(
                     fm.book_output_dir(
                         book_dir.name,
@@ -897,14 +922,43 @@ async def api_translate(req: TranslateRequest):
                     ),
                     suffix_if_exists=False
                 )
-                output_path = fm.ensure_file_path(
-                    translated_book_dir / f"{book_dir.name}.txt",
-                    suffix_if_exists=True
-                )
+
+                resume_from = 0
+                if req.resume:
+                    # Nastavi od checkpointa — koristi postojeću izlaznu datoteku
+                    checkpoint = None
+                    for checkpoint_data in cp.ucitaj_checkpointe():
+                        if checkpoint_data.get("book_id") == book_id:
+                            checkpoint = checkpoint_data
+                            break
+                    if checkpoint is None:
+                        raise RuntimeError(
+                            "Nema spremljenog checkpointa za ovu knjigu. "
+                            "Pokrenite novi prijevod."
+                        )
+                    output_path = Path(checkpoint.get("output_path", ""))
+                    if not output_path.exists():
+                        raise RuntimeError(
+                            f"Izlazna datoteka checkpointa ne postoji: {output_path}"
+                        )
+                    resume_from = checkpoint.get("current_segment", 0)
+                    logging.info(
+                        f"[PRIJEVOD] Nastavljam od segmenta {resume_from} "
+                        f"({checkpoint.get('progress_percent', 0)}%)"
+                    )
+                else:
+                    # Novi prijevod — kreiraj novu izlaznu datoteku i obriši stari checkpoint
+                    output_path = fm.ensure_file_path(
+                        translated_book_dir / f"{book_dir.name}.txt",
+                        suffix_if_exists=True
+                    )
+                    cp.obrisi_checkpoint(book_id)
+
                 translation, is_interrupted = translator.prevedi_knjigu(
                     text, output_path=str(output_path),
-                    book_id=f"{book_dir.name}_web",
-                    granularnost=req.granularity
+                    book_id=book_id,
+                    granularnost=req.granularity,
+                    resume_from=resume_from
                 )
                 try:
                     copy_metadata_to_target(file_path, output_path, INPUT_DIR, OUTPUT_DIR, TRANSLATED_DIR)

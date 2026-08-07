@@ -717,9 +717,14 @@ class Translator:
                     continue
                 if key == "thinking_config":
                     if "generationConfig" not in payload: payload["generationConfig"] = {}
+                    # Gemini prihvaća SAMO thinkingBudget (cijeli broj).
+                    # includeThinkingConfig NIJE podržan i uzrokuje HTTP 400.
+                    try:
+                        thinking_budget = int(value.get("thinking_budget", 0))
+                    except (TypeError, ValueError):
+                        thinking_budget = 0
                     payload["generationConfig"]["thinkingConfig"] = {
-                        "includeThinkingConfig": value.get("include_thinking_config", True),
-                        "thinkingBudget": value.get("thinking_budget", 0)
+                        "thinkingBudget": thinking_budget
                     }
                     continue
 
@@ -735,6 +740,7 @@ class Translator:
                     payload["generationConfig"] = {}
                 if "thinkingConfig" not in payload["generationConfig"]:
                     payload["generationConfig"]["thinkingConfig"] = {}
+                # Minimalno trošenje tokena — isključi razmišljanje (thinkingBudget=0)
                 payload["generationConfig"]["thinkingConfig"]["thinkingBudget"] = 0
 
         return payload
@@ -821,10 +827,27 @@ class Translator:
             "generationConfig": base_payload.get("generationConfig", {})
         }
 
-        # Add other parameters that might be in base_payload but not in generationConfig
+        # Gemini generacijske parametre mapiraj na ispravne nazive (camelCase)
+        # i preskoči parametre koje Gemini API ne podržava (min_p, repeat_penalty,
+        # ...) — oni uzrokuju HTTP 400 Bad Request.
+        gemini_param_map = {
+            "temperature": "temperature",
+            "top_p": "topP",
+            "top_k": "topK",
+            "candidate_count": "candidateCount",
+            "stop_sequences": "stopSequences",
+            "presence_penalty": "presencePenalty",
+            "frequency_penalty": "frequencyPenalty",
+            "seed": "seed",
+        }
         for k, v in base_payload.items():
-            if k not in ("messages", "stream", "generationConfig", "contents", "systemInstruction"):
-                payload["generationConfig"][k] = v
+            if k in ("messages", "stream", "generationConfig", "contents", "systemInstruction"):
+                continue
+            gemini_key = gemini_param_map.get(k)
+            if gemini_key is None:
+                logging.debug(f"Gemini: preskačem nepodržani parametar '{k}'")
+                continue
+            payload["generationConfig"][gemini_key] = v
 
         if system_instruction:
             payload["systemInstruction"] = system_instruction
@@ -836,12 +859,25 @@ class Translator:
             url = f"{base_url}/models/{model}:generateContent"
 
         response = self._http_request(url, payload, headers)
-        # Gemini response format je drugačiji
-        try:
-            data = json.loads(response)
-            result = data["candidates"][0]["content"]["parts"][0]["text"]
-        except (KeyError, json.JSONDecodeError):
-            result = response
+        # Gemini response format je drugačiji — _http_request vraća parsirani dict.
+        # Ako je iz nekog razloga string, pokušaj json.loads; inače koristi dict direktno.
+        if isinstance(response, str):
+            try:
+                data = json.loads(response)
+            except json.JSONDecodeError:
+                data = None
+        else:
+            data = response
+
+        result = ""
+        if isinstance(data, dict):
+            try:
+                result = data["candidates"][0]["content"]["parts"][0]["text"]
+            except (KeyError, IndexError, TypeError):
+                logging.warning("Gemini: ne mogu parsirati tekst iz odgovora, vraćam prazan string.")
+                result = ""
+        else:
+            result = str(response)
 
         # Logiraj Gemini LLM razgovor
         user_msg = ""
@@ -866,7 +902,7 @@ class Translator:
     # -----------------------------------------------------------------------
 
     def _http_request(self, url: str, payload: dict[str, Any],
-                     headers: dict[str, str] | None = None) -> str:
+                     headers: dict[str, str] | None = None) -> Any:
         """Izvršava HTTP POST request s automatskim retry mehanizmom za HTTP 429 (Too Many Requests).
 
         Parametri za retry (max_attempts, initial_delay, backoff_factor) čitaju se iz konfiguracije (settings.yaml).
@@ -911,8 +947,9 @@ class Translator:
                             "model": payload.get("model", ""),
                         })
                         return result
-                    # Fallback - vrati cijeli response
-                    return str(response_data)
+                    # Fallback - vrati parsirani response (dict).
+                    # Provider adapteri (npr. Gemini) sami parsiraju strukturu.
+                    return response_data
             except urllib.error.HTTPError as e:
                 # P4: Fail-fast logika - trajne greške odmah zaustavljaju skriptu
                 if e.code in (401, 403, 404):
