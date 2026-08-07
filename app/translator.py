@@ -40,9 +40,11 @@ class Translator:
     # Memorija za trenutnu knjigu (CHARACTERS, GLOSSARY, GRAMMAR_FIXES)
     _UCITANA_MEMORIJA: dict[str, Any] = {}
 
-    def __init__(self, config: dict[str, Any], checkpoint_manager: CheckpointManager) -> None:
+    def __init__(self, config: dict[str, Any], checkpoint_manager: CheckpointManager,
+                 web_mode: bool = False) -> None:
         self._cfg = config
         self._cp = checkpoint_manager
+        self._web_mode = web_mode  # True = Web GUI (bez input() blokiranja)
         self._api_cfg = config.get("api", {})
         self._trans_cfg = config.get("translation", {})
         self._provider_name = self._api_cfg.get("provider", "lmstudio") # Koristimo provider_name i model_name
@@ -403,9 +405,19 @@ class Translator:
                     logging.warning(f"Prevođenje prekinuto od strane korisnika: {e}")
                     je_prekinuto = True
                     break
+                except RuntimeError as e:
+                    # Fail-fast greške (401/403/404) — prekid s spremanjem checkpointa
+                    # kako bi korisnik mogao promijeniti provider i nastaviti.
+                    logging.error(
+                        f"KRITIČNA GREŠKA pri segmentu {idx + 1}/{ukupno}: {e}. "
+                        f"Prekidam prijevod — napredak je spremljen."
+                    )
+                    je_prekinuto = True
+                    break
                 except Exception as e:
                     logging.error(f"Greška pri prevođenju segmenta {idx + 1}/{ukupno}: {e}")
-                    prevedeni.append(segment)  # Fallback na original
+                    prijevod = segment  # Fallback na original
+                    prevedeni.append(prijevod)
 
                 akumulirane_rijeci += rijeci_u_segmentu
 
@@ -972,8 +984,21 @@ class Translator:
                         print("\r" + " " * 60 + "\r", end="", flush=True)  # očisti liniju
                         continue
                     else:
-                        # Maksimalan broj automatskih pokušaja premašen, pitaj korisnika
+                        # Maksimalan broj automatskih pokušaja premašen
                         print(f"\nSvi automatski pokušaji ponavljanja (HTTP {e.code}) su neuspješni.")
+                        if self._web_mode:
+                            # Web GUI: ne blokiramo na input() — automatski prekid.
+                            # prevedi_knjigu hvata InterruptedError, sprema checkpoint
+                            # i vraća is_interrupted=True.
+                            logging.error(
+                                f"HTTP {e.code}: Svi automatski pokušaji su neuspješni. "
+                                f"Prekidam prijevod — napredak je spremljen."
+                            )
+                            raise InterruptedError(
+                                f"HTTP {e.code}: Prekid nakon iscrpljenih automatskih pokušaja. "
+                                f"Napredak je spremljen — možete promijeniti provider i nastaviti."
+                            )
+                        # CLI: pitaj korisnika
                         while True:
                             izbor = input("Želite li pokušati ponovno [Y] ili prekinuti proces [X]? (Y/X): ").strip().upper()
                             if izbor in ("Y", "D", "DA", "YES", "P"):

@@ -193,7 +193,11 @@ async def api_checkpoint_status(rel_path: str = ""):
     """
     if not rel_path:
         return JSONResponse({"has_checkpoint": False})
-    book_id = f"{Path(rel_path).stem}_web"
+    # book_id se gradi iz IMENA DIREKTORIJA knjige (book_dir.name),
+    # identično kao u _run_production — ne iz stem-a datoteke.
+    file_path = OUTPUT_DIR / rel_path
+    book_dir_name = file_path.parent.name if file_path.parent != OUTPUT_DIR else Path(rel_path).stem
+    book_id = f"{book_dir_name}_web"
     for cp in _load_checkpoints():
         if cp.get("book_id") == book_id:
             return JSONResponse({
@@ -849,7 +853,7 @@ async def api_translate(req: TranslateRequest):
 
         fm = FileManager(config)
         cp = CheckpointManager(config, fm)
-        translator = Translator(config, cp)
+        translator = Translator(config, cp, web_mode=True)
 
         file_path = OUTPUT_DIR / req.rel_path
         if not file_path.exists():
