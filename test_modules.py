@@ -32,7 +32,7 @@ except Exception as e:
     sys.exit(1)
 
 try:
-    from app.utils import sanitiziraj_naziv
+    from app.utils import sanitiziraj_naziv, ocisti_leaked_prijevod
     print("[OK] app.utils")
 except Exception as e:
     print(f"[FAIL] app.utils: {e}")
@@ -139,6 +139,109 @@ def test_local_provider_payload_compatibility():
             assert payload["extra_body"]["enable_thinking"] is False
 
 
+def test_compact_prompt_keeps_recent_context():
+    cfg = {
+        "api": {"provider": "unsloth", "model": "local", "recent_context_pairs": 2},
+        "translation": {"temperature": 0.2},
+    }
+    translator = Translator(cfg, None)
+    type(translator)._UCITANA_MEMORIJA = {
+        "CHARACTERS": {f"Person{i}": f"Strictly {i} grammar" for i in range(20)},
+        "GLOSSARY": {f"term{i}": f"prevod{i}" for i in range(40)},
+        "GRAMMAR_FIXES": {f"rule{i}": f"fix {i}" for i in range(20)},
+    }
+
+    prompt = translator._generiraj_system_prompt()
+    assert "CHARACTER GENDER REGISTER" in prompt
+    assert len(prompt) < 5000
+
+    translator._recent_context = [
+        {"role": "user", "content": "A"},
+        {"role": "assistant", "content": "B"},
+        {"role": "user", "content": "C"},
+        {"role": "assistant", "content": "D"},
+    ]
+
+    incoming = "Segment text"
+    messages = [{"role": "system", "content": prompt}]
+    messages.extend(translator._recent_context[-(translator._max_recent_context_pairs * 2):])
+    messages.append({"role": "user", "content": incoming})
+    assert len(messages) == 6
+    assert messages[-1]["content"] == incoming
+    assert messages[1]["role"] == "user"
+
+
+def test_blank_response_uses_configured_prompt_fallbacks():
+    cfg = {
+        "api": {"provider": "unsloth", "model": "local", "providers": [{"provider": "unsloth", "model": "local", "apiBase": "http://127.0.0.1:8888/v1"}]},
+        "translation": {"temperature": 0.2},
+        "fallback": {
+            "blank_response": {
+                "enabled": True,
+                "policy": [
+                    {"action": "reduce_prompt", "mode": "compact"},
+                    {"action": "reduce_prompt", "mode": "minimal"},
+                    {"action": "record", "message": "MODEL VRAĆA PRAZAN STRING"},
+                ],
+            }
+        },
+    }
+    translator = Translator(cfg, None)
+    seen = []
+
+    def fake_api_call(messages):
+        seen.append(messages[0]["content"])
+        if len(seen) <= 2:
+            return ""
+        return "OK"
+
+    translator._api_call = fake_api_call
+
+    result = translator.prevedi_segment("Test input")
+
+    assert result == "OK"
+    assert len(seen) == 3
+    assert any("Translate the following English text to Croatian" in prompt for prompt in seen)
+    assert not any("MODEL VRAĆA PRAZAN STRING" in prompt for prompt in seen)
+
+
+def test_blank_response_retries_each_prompt_step_until_success():
+    cfg = {
+        "api": {"provider": "unsloth", "model": "local", "providers": [{"provider": "unsloth", "model": "local", "apiBase": "http://127.0.0.1:8888/v1"}]},
+        "translation": {"temperature": 0.2},
+        "fallback": {"blank_response": {"enabled": True, "policy": [
+            {"action": "reduce_prompt", "mode": "compact"},
+            {"action": "reduce_prompt", "mode": "minimal"},
+            {"action": "record", "message": "MODEL VRAĆA PRAZAN STRING"},
+        ]}},
+    }
+    translator = Translator(cfg, None)
+    seen = []
+
+    def fake_api_call(messages):
+        seen.append(messages[0]["content"])
+        if len(seen) < 3:
+            raise ValueError("LLM vratio prazan odgovor.")
+        return "OK"
+
+    translator._api_call = fake_api_call
+
+    result = translator.prevedi_segment("Test input")
+
+    assert result == "OK"
+    assert len(seen) == 3
+    assert "Translate the following English text to Croatian" in seen[2]
+
+
+def test_ocisti_leaked_prijevod_keeps_leading_dialogue_quote():
+    text = '"U čemu je, jebote, problem?" upitao je.'
+    assert ocisti_leaked_prijevod(text) == text
+
+
 if __name__ == "__main__":
     test_local_provider_payload_compatibility()
+    test_compact_prompt_keeps_recent_context()
+    test_blank_response_uses_configured_prompt_fallbacks()
+    test_blank_response_retries_each_prompt_step_until_success()
+    test_ocisti_leaked_prijevod_keeps_leading_dialogue_quote()
     print("\n[OK] Local provider payload compatibility passed!")

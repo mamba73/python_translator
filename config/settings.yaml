@@ -44,11 +44,21 @@ translation:
   header_footer_threshold: 0.4
   test_header: true
   granularity: paragraph
-  default_count: 4
+  default_count: 6
   thinking_config:
     include_thinking_config: true
     thinking_level: 0
     thinking_budget: 0
+fallback:
+  blank_response:
+    enabled: true
+    policy:
+    - action: reduce_prompt
+      mode: compact
+    - action: reduce_prompt
+      mode: minimal
+    - action: record
+      message: MODEL VRAĆA PRAZAN STRING
 sort_mode: date_desc
 text_cleaning:
   content_start_markers:

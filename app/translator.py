@@ -61,6 +61,11 @@ class Translator:
         # pri svakom segmentu i spriječava spam [LOKALNI MODEL] logova.
         self._lokalni_modeli_cache: list[str] | None = None
 
+        # Kratka povijest nedavnih segmenata koristi se za očuvanje konteksta
+        # bez ponavljanja cjelokupnog system prompta na svakom zahtjevu.
+        self._recent_context: list[dict[str, str]] = []
+        self._max_recent_context_pairs = max(0, int(self._api_cfg.get("recent_context_pairs", 2)))
+
     def _dohvati_provider_konfiguraciju(self) -> dict[str, Any]:
         """Dohvaća kompletnu konfiguraciju za aktivni provider i model iz liste."""
         providers_list = self._api_cfg.get("providers", [])
@@ -152,14 +157,12 @@ class Translator:
             logging.warning(f"Greška pri učitavanju memorija datoteke: {e}")
 
     def _generiraj_system_prompt(self) -> str:
-        """Generira finalni system prompt s opcionalnim injektom memorije.
+        """Generira kompaktnu verziju system prompta s memorijom.
 
-        Ekvivalent `generiraj_system_prompt_sa_likovima()` iz mamba_voice.py —
-        formatira memoriju (CHARACTERS + GLOSSARY + GRAMMAR_FIXES) u STRICT
-        blok i dodaje ga ispred per-book (ili default) system prompt-a.
-
-        Returns:
-            Modificirani system prompt string (s memorijom ili bez).
+        Zadržava ključna pravila i najvažniju memoriju, ali smanjuje opterećenje
+        prompta po segmentu kako bi veći modeli imali više prostora za stvarni
+        prijevod. Niz recent context poruka održava kontinuitet između segmenata
+        bez ponavljanja cijelog glossary-ja u svakom requestu.
         """
         base_prompt = self._book_system_prompt or self._generiraj_default_system_prompt()
         memorija = type(self)._UCITANA_MEMORIJA
@@ -167,21 +170,21 @@ class Translator:
         if not memorija:
             return base_prompt
 
-        linije: list[str] = []
+        max_chars = 6
+        max_glossary = 16
+        max_grammar = 6
 
-        # CHARACTERS -> CHARACTER GENDER REGISTER
+        linije: list[str] = []
         characters = memorija.get("CHARACTERS") or {}
-        for ime, opis in characters.items():
+        for ime, opis in list(characters.items())[:max_chars]:
             linije.append(f"{ime}: {opis}")
 
-        # GLOSSARY -> pojam = prijevod
         glossary = memorija.get("GLOSSARY") or {}
-        for pojam, prijevod in glossary.items():
+        for pojam, prijevod in list(glossary.items())[:max_glossary]:
             linije.append(f"{pojam} = {prijevod} (GLOSSARY)")
 
-        # GRAMMAR_FIXES -> naziv: pravilo
         grammar = memorija.get("GRAMMAR_FIXES") or {}
-        for naziv, pravilo in grammar.items():
+        for naziv, pravilo in list(grammar.items())[:max_grammar]:
             linije.append(f"{naziv}: {pravilo} (GRAMMAR_FIXES)")
 
         if not linije:
@@ -190,12 +193,22 @@ class Translator:
         memorijski_blok = (
             "CHARACTER GENDER REGISTER (STRICT DIRECTIVE):\n"
             "For the duration of this text, adhere to these strictly locked character profiles:\n"
-            + "\n".join(linije) + "\n"
-            + "-" * 80 + "\n"
+            + "\n".join(linije)
+            + "\n[Supplementary glossary entries are condensed and recent conversation history maintains continuity.]\n"
         )
 
-        logging.debug(f"Injektovan memorijski blok u system prompt ({len(linije)} stavki)")
-        return memorijski_blok + base_prompt
+        compact = memorijski_blok + "\n" + base_prompt
+        if len(compact) > 5000:
+            compact = (
+                "CHARACTER GENDER REGISTER (STRICT DIRECTIVE):\n"
+                "Keep the character/terminology profile stable for this book.\n"
+                + "\n".join(linije[:20])
+                + "\n[Compact context mode: full glossary is not resent on every segment.]\n\n"
+                + base_prompt
+            )
+
+        logging.debug(f"Injektovan kompaktniji memorijski blok u system prompt ({len(linije)} stavki)")
+        return compact
 
     @staticmethod
     def _pronadi_memorija_datoteku(book_dir: str, memorija_file: str | None) -> str | None:
@@ -254,6 +267,85 @@ class Translator:
         # Očisti višak praznih redova i vrati stripped rezultat
         return tekst.strip()
 
+    def _ucitaj_blank_response_policy(self) -> dict[str, Any]:
+        """Učitava config-driven fallback policy za prazne odgovore.
+
+        Policy je lista koraka; preporučena default vrijednost je 3 koraka, ali se
+        može definirati bilo koji broj koraka bez hardkodiranja modela.
+        """
+        fallback_cfg = self._cfg.get("fallback") or {}
+        blank_cfg = fallback_cfg.get("blank_response") or {}
+        if not isinstance(blank_cfg, dict):
+            blank_cfg = {}
+
+        policy = blank_cfg.get("policy") or [
+            {"action": "reduce_prompt", "mode": "compact"},
+            {"action": "reduce_prompt", "mode": "minimal"},
+            {"action": "record", "message": "MODEL VRAĆA PRAZAN STRING"},
+        ]
+
+        return {
+            "enabled": bool(blank_cfg.get("enabled", True)),
+            "policy": policy,
+        }
+
+    def _smanji_prompt_za_retry(self, system_prompt: str, mode: str) -> str:
+        """Smanjuje system prompt za retry bez hardkodiranog model-switcha."""
+        base_prompt = self._book_system_prompt or self._generiraj_default_system_prompt()
+        default_translation = base_prompt.split("\n\nSTRICT DIRECTIVE", 1)[0].strip()
+
+        if mode == "minimal":
+            return (
+                "Translate the following English text to Croatian. "
+                "Output only the final translation, with no explanation, no notes, and no preamble."
+            )
+
+        if mode == "compact":
+            compact_base = default_translation or self._generiraj_default_system_prompt()
+            return (
+                compact_base
+                + "\n\nKeep the translation strict and concise. "
+                "Output only the final Croatian translation, nothing else."
+            )
+
+        return system_prompt
+
+    def _obradi_prazan_odgovor(self, messages: list[dict[str, str]], system_prompt: str) -> str:
+        """Applies config-driven retry policy for blank completions."""
+        policy_cfg = self._ucitaj_blank_response_policy()
+        if not policy_cfg.get("enabled", False):
+            return ""
+
+        current_prompt = system_prompt
+        for item in policy_cfg.get("policy", []):
+            action = str(item.get("action", "")).lower()
+            if action == "reduce_prompt":
+                retry_prompt = self._smanji_prompt_za_retry(current_prompt, str(item.get("mode", "compact")))
+                retry_messages = [dict(msg) for msg in messages]
+                retry_messages[0]["content"] = retry_prompt
+                try:
+                    response = self._api_call(messages=retry_messages)
+                except ValueError as exc:
+                    if "prazan odgovor" not in str(exc).lower():
+                        raise
+                    response = ""
+                response = self._ocisti_razmisljanje(response)
+                if response and response.strip():
+                    return response
+                current_prompt = retry_prompt
+                continue
+
+            if action == "record":
+                message = str(item.get("message") or "MODEL VRAĆA PRAZAN STRING")
+                logging.warning(f"[BLANK RESPONSE] {message}")
+                return ""
+
+            if action == "raise":
+                message = str(item.get("message") or "Model vraća prazan string.")
+                raise RuntimeError(message)
+
+        return ""
+
     def prevedi_segment(self, tekst: str, system_prompt: str | None = None) -> str:
         """Unificirana metoda za prevođenje segmenta (odlomak/paragraf/rečenica).
 
@@ -280,15 +372,39 @@ class Translator:
         # P1: Verbatim log originalnog teksta prije slanja
         log_verbatim(tekst, "prevedi_segment - input")
 
-        response = self._api_call(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": tekst}
-            ]
-        )
+        messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+        if self._recent_context:
+            messages.extend(self._recent_context[-(self._max_recent_context_pairs * 2):])
+        messages.append({"role": "user", "content": tekst})
+
+        try:
+            response = self._api_call(messages=messages)
+        except ValueError as exc:
+            if "prazan odgovor" not in str(exc).lower():
+                raise
+            response = self._obradi_prazan_odgovor(messages, system_prompt)
+            if not response or not response.strip():
+                logging.error(f"[PRIJEVOD] Greška: {exc}")
+                return ""
 
         # Post-processing: očisti thinking tagove PRIJE standardnog čišćenja
         response = self._ocisti_razmisljanje(response)
+
+        if not response or not response.strip():
+            response = self._obradi_prazan_odgovor(messages, system_prompt)
+
+        if not response or not response.strip():
+            logging.error("[PRIJEVOD] Greška: LLM vratio prazan odgovor.")
+            return ""
+
+        # Zadrži kratku povijest recent contexta kako bismo očuvali kontinuitet
+        # bez ponavljanja cijelog system prompta za svaki segment.
+        self._recent_context.extend([
+            {"role": "user", "content": tekst},
+            {"role": "assistant", "content": response},
+        ])
+        if len(self._recent_context) > self._max_recent_context_pairs * 2:
+            self._recent_context = self._recent_context[-(self._max_recent_context_pairs * 2):]
         
         # Standardno post-processing
         response = unificiraj_navodnike(response)
@@ -549,17 +665,14 @@ class Translator:
         return adapter(messages)
 
     def _api_call_local(self, messages: list[dict[str, str]]) -> str:
-        """API poziv za 'local' model - automatska detekcija i fallback na sljedeći model.
+        """API poziv za 'local' model bez auto-switcha na druge modele.
 
-        Ako je u konfiguraciji pod poljem 'model' točno "local", skripta NE
-        šalje taj string kao naziv modela. Umjesto toga:
-          1. Šalje GET zahtjev na {base_url}/models
-          2. Dohvaća PRVI aktivni model iz liste
-          3. Ako taj model baci API grešku, automatski skače na SLJEDEĆI
-             model s iste liste i pokušava ponovno.
+        Kada je `model: local`, dohvaća se lista dostupnih modela, ali se koristi
+        samo PRVI model za trenutni request. Ne iterira se kroz cijeli popis nakon
+        praznog odgovora ili 404. Prazan output se obrađuje kroz config policy
+        (`fallback.blank_response`), a ne kroz zamjenu modela.
         """
-        # Cache detekciju: samo prvi poziv dohvaća modele s HTTP endpointa
-        # i logira info o modelu. Svi sljedeći segmenti koriste cache.
+        # Cache detekciju: samo prvi poziv dohvaća modele s HTTP endpointa.
         if self._lokalni_modeli_cache is None:
             modeli = self._dohvati_lokalne_modele()
             if not modeli:
@@ -575,18 +688,15 @@ class Translator:
         else:
             modeli = self._lokalni_modeli_cache
 
-        zadnja_greska: Exception | None = None
-        for model in modeli:
-            try:
-                return self._api_call_s_modelom(messages, model)
-            except Exception as e:
-                zadnja_greska = e
-                logging.warning(
-                    f"[LOKALNI MODEL] Model '{model}' nije uspio: {e}. "
-                    f"Pokušavam sljedeći..."
-                )
-
-        raise RuntimeError(f"Svi lokalni modeli su neuspješni: {zadnja_greska}")
+        model = modeli[0]
+        try:
+            return self._api_call_s_modelom(messages, model)
+        except Exception as e:
+            logging.warning(
+                f"[LOKALNI MODEL] Model '{model}' nije uspio: {e}. "
+                f"Ne prebacujem se na drugi lokalni model; predajem se config fallback policy."
+            )
+            raise
 
     def _dohvati_lokalne_modele(self) -> list[str]:
         """Dohvaća listu dostupnih modela s lokalnog endpointa {base_url}/models.
@@ -999,7 +1109,12 @@ class Translator:
                     response_data = json.loads(response.read().decode('utf-8'))
                     # Standard OpenAI format
                     if "choices" in response_data:
-                        result = response_data["choices"][0]["message"]["content"].strip()
+                        choice = response_data["choices"][0]
+                        message = choice.get("message", {}) if isinstance(choice, dict) else {}
+                        content = message.get("content", "") if isinstance(message, dict) else ""
+                        result = content.strip() if isinstance(content, str) else str(content).strip()
+                        if not result:
+                            raise ValueError("LLM vratio prazan odgovor.")
                         # P1: Logiraj LLM razgovor (prompt + response)
                         user_msg = ""
                         for m in payload.get("messages", []):

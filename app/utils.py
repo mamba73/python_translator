@@ -261,8 +261,9 @@ def ocisti_leaked_prijevod(tekst: str) -> str:
     for uzorak in uzorci:
         tekst = re.sub(uzorak, '', tekst, flags=re.IGNORECASE)
 
-    # Također ukloni bilo kakve ostatke poput "..." na početku
-    tekst = re.sub(r'^[\s"\']+', '', tekst)
-    tekst = re.sub(r'[\s"\']+$', '', tekst)
+    # Ne uklanjaj navodnike na početku/završetku — oni često pripadaju
+    # stvarnom dijalogu (npr. "U čemu je, jebote, problem?" upitao je.).
+    tekst = re.sub(r'^\s+', '', tekst)
+    tekst = re.sub(r'\s+$', '', tekst)
 
     return tekst.strip()
