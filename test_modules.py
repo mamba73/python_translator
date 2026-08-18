@@ -90,4 +90,55 @@ except Exception as e:
     print(f"\n[FAIL] Config loading failed: {e}")
     sys.exit(1)
 
-print("\n[OK] All tests passed!")
+def test_local_provider_payload_compatibility():
+    cfg = {
+        "api": {
+            "provider": "unsloth",
+            "model": "local",
+            "providers": [
+                {"provider": "unsloth", "model": "local", "apiBase": "http://127.0.0.1:8888/v1"},
+                {"provider": "lmstudio", "model": "local", "apiBase": "http://127.0.0.1:1234/v1"},
+            ],
+        },
+        "translation": {
+            "temperature": 0.25,
+            "max_tokens": 1024,
+            "top_p": 0.8,
+            "top_k": 15,
+            "min_p": 0.05,
+            "repeat_penalty": 1.2,
+            "disable_reasoning": True,
+            "api_parameters": [
+                "temperature",
+                "max_tokens",
+                "top_p",
+                "min_p",
+                "top_k",
+                "repeat_penalty",
+                "thinking_config",
+            ],
+            "thinking_config": {"include_thinking_config": True, "thinking_budget": 0},
+        },
+    }
+
+    for provider in ("unsloth", "lmstudio"):
+        cfg["api"]["provider"] = provider
+        translator = Translator(cfg, None)
+        payload = translator._build_payload([{"role": "user", "content": "Test"}])
+
+        assert payload["temperature"] == 0.25
+        assert payload["max_tokens"] == 1024
+        assert "reasoning" not in payload
+        assert "thinking" not in payload
+        assert "extra_body" in payload
+        assert payload["extra_body"]["top_k"] == 15
+        assert payload["extra_body"]["min_p"] == 0.05
+        assert payload["extra_body"]["repetition_penalty"] == 1.2
+
+        if provider == "unsloth":
+            assert payload["extra_body"]["enable_thinking"] is False
+
+
+if __name__ == "__main__":
+    test_local_provider_payload_compatibility()
+    print("\n[OK] Local provider payload compatibility passed!")

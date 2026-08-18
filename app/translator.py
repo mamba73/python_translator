@@ -599,21 +599,21 @@ class Translator:
         """
         base_url = self._current_provider_cfg.get("apiBase", "")
         if not base_url:
-            base_url = (
-                "http://127.0.0.1:1234"
-                if self._provider_name == "lmstudio"
-                else "http://127.0.0.1:11434"
-            )
+            base_url = {
+                "lmstudio": "http://127.0.0.1:1234",
+                "unsloth": "http://127.0.0.1:8888",
+            }.get(self._provider_name, "http://127.0.0.1:11434")
 
-        # Normaliziraj base_url za LM Studio — ako već sadrži /v1, ne dodaj ga ponovno
-        if self._provider_name == "lmstudio" and not base_url.rstrip("/").endswith("/v1"):
+        # Normaliziraj base_url za OpenAI-compatible (LM Studio, unsloth)
+        # — ako već sadrži /v1, ne dodaj ga ponovno
+        if self._provider_name in ("lmstudio", "unsloth") and not base_url.rstrip("/").endswith("/v1"):
             base_url = base_url.rstrip("/") + "/v1"
 
         models_url = f"{base_url}/models"
         detect_timeout = self._api_cfg.get("auto_detect_timeout", 5)
 
         try:
-            request = urllib.request.Request(models_url, method="GET")
+            request = urllib.request.Request(models_url, method="GET", headers=self._dohvati_headers())
             with urllib.request.urlopen(request, timeout=detect_timeout) as response:
                 data = json.loads(response.read().decode('utf-8'))
 
@@ -742,17 +742,37 @@ class Translator:
 
             payload[key] = value
 
-        # Provider-specific overrides for reasoning/thinking if disabled
-        if self._trans_cfg.get("disable_reasoning", True):
-            if self._provider_name in ("lmstudio", "ollama", "openai"):
-                payload["reasoning"] = False
-                payload["thinking"] = False
-            elif self._provider_name == "gemini":
+        # Local OpenAI-compatible servers are picky about unsupported root-level
+        # flags; keep standard values at the root but move provider-specific knobs
+        # into extra_body to avoid HTTP 400s.
+        if self._provider_name in ("lmstudio", "unsloth", "ollama"):
+            extra_body = payload.setdefault("extra_body", {})
+
+            for key, extra_key in (
+                ("top_k", "top_k"),
+                ("min_p", "min_p"),
+                ("repeat_penalty", "repetition_penalty"),
+            ):
+                if key in self._trans_cfg:
+                    extra_body[extra_key] = self._trans_cfg[key]
+
+            if self._provider_name == "unsloth":
+                extra_body["enable_thinking"] = not bool(self._trans_cfg.get("disable_reasoning", True))
+                for key in ("enable_tools", "enabled_tools", "tool_choice"):
+                    if key in self._trans_cfg:
+                        extra_body[key] = self._trans_cfg[key]
+
+            # Root-level reasoning flags are not universally supported and can
+            # trigger 400 Bad Request against local OpenAI-compatible servers.
+            payload.pop("reasoning", None)
+            payload.pop("thinking", None)
+
+        elif self._provider_name == "gemini":
+            if self._trans_cfg.get("disable_reasoning", True):
                 if "generationConfig" not in payload:
                     payload["generationConfig"] = {}
                 if "thinkingConfig" not in payload["generationConfig"]:
                     payload["generationConfig"]["thinkingConfig"] = {}
-                # Minimalno trošenje tokena — isključi razmišljanje (thinkingBudget=0)
                 payload["generationConfig"]["thinkingConfig"]["thinkingBudget"] = 0
 
         return payload
@@ -789,6 +809,26 @@ class Translator:
             payload["model"] = model
 
         return self._http_request(f"{base_url}/chat/completions", payload)
+
+    def _call_unsloth(self, messages: list[dict[str, str]]) -> str:
+        """Adapter za unsloth (OpenAI-compatible, lokalni server na :8888)."""
+        # Koristimo _current_provider_cfg koji je vec dohvacen u __init__
+        base_url = self._current_provider_cfg.get("apiBase", "http://127.0.0.1:8888")
+        model = self._current_provider_cfg.get("model", "")
+
+        # Normaliziraj base_url — ako već sadrži /v1, ne dodaj ga ponovno
+        if not base_url.rstrip("/").endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+
+        payload = self._build_payload(messages)
+        if model and model != "local":
+            payload["model"] = model
+
+        headers = {"Content-Type": "application/json"}
+        # unsloth zahtijeva Authorization: Bearer sk-unsloth-... na svakom zahtjevu.
+        headers.update(self._dohvati_headers())
+
+        return self._http_request(f"{base_url}/chat/completions", payload, headers)
 
     def _call_openai(self, messages: list[dict[str, str]]) -> str:
         """Adapter za OpenAI (ili Qwen putem OpenAI kompatibilnog API-ja)."""
@@ -912,6 +952,19 @@ class Translator:
     # -----------------------------------------------------------------------
     # HTTP request helper
     # -----------------------------------------------------------------------
+
+    def _dohvati_headers(self) -> dict[str, str]:
+        """Buildira HTTP zaglavlja s opcionalnim Bearer tokenom (npr. unsloth).
+
+        Za provajdere koji zahtijevaju API ključ (key_env) uključuje
+        Authorization: Bearer <ključ> zaglavlje; inače vraća prazan rječnik.
+        """
+        headers: dict[str, str] = {}
+        api_key = self._current_provider_cfg.get("api_key", "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
+
 
     def _http_request(self, url: str, payload: dict[str, Any],
                      headers: dict[str, str] | None = None) -> Any:
@@ -1142,6 +1195,9 @@ class Translator:
         try:
             if self._provider_name == "lmstudio":
                 return self._detect_lm_studio_model()
+            elif self._provider_name == "unsloth":
+                # unsloth koristi isti OpenAI-compatible /v1/models endpoint kao LM Studio
+                return self._detect_lm_studio_model()
             elif self._provider_name == "ollama":
                 return self._detect_ollama_model()
         except Exception as e:
@@ -1170,7 +1226,7 @@ class Translator:
         detect_timeout = self._api_cfg.get("auto_detect_timeout", 5)
 
         try:
-            request = urllib.request.Request(models_url, method="GET")
+            request = urllib.request.Request(models_url, method="GET", headers=self._dohvati_headers())
             with urllib.request.urlopen(request, timeout=detect_timeout) as response:
                 data = json.loads(response.read().decode('utf-8'))
                 if data.get("data") and len(data["data"]) > 0:
@@ -1224,13 +1280,13 @@ class Translator:
         detect_timeout = self._api_cfg.get("auto_detect_timeout", 5)
 
         try:
-            if self._provider_name == "lmstudio":
+            if self._provider_name in ("lmstudio", "unsloth"):
                 base_url = self._current_provider_cfg.get("apiBase", "http://127.0.0.1:1234")
                 # Normaliziraj base_url — ako već sadrži /v1, ne dodaj ga ponovno
                 if not base_url.rstrip("/").endswith("/v1"):
                     base_url = base_url.rstrip("/") + "/v1"
                 models_url = f"{base_url}/models"
-                request = urllib.request.Request(models_url, method="GET")
+                request = urllib.request.Request(models_url, method="GET", headers=self._dohvati_headers())
                 with urllib.request.urlopen(request, timeout=detect_timeout) as response:
                     data = json.loads(response.read().decode('utf-8'))
                     if data.get("data") and len(data["data"]) > 0:

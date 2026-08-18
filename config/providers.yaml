@@ -9,6 +9,12 @@ models:
     model: "local"
     apiBase: "http://localhost:1234/v1"
 
+  - title: "unsloth (localhost)"
+    provider: "unsloth"
+    model: "local"
+    apiBase: "http://127.0.0.1:8888/v1"
+    key_env: "UNSLOTH_API_KEY"
+
   - title: "Ollama Lokalno"
     provider: "ollama"
     model: "local"

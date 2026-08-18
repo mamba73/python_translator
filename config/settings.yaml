@@ -11,7 +11,7 @@ directories:
   logs: ./work/logs
   config: ./config
 api:
-  provider: lmstudio
+  provider: unsloth
   auto_detect_model: true
   auto_detect_timeout: 5
   timeout: 120
@@ -44,7 +44,7 @@ translation:
   header_footer_threshold: 0.4
   test_header: true
   granularity: paragraph
-  default_count: 3
+  default_count: 4
   thinking_config:
     include_thinking_config: true
     thinking_level: 0
