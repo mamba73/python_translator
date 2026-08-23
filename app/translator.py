@@ -578,7 +578,7 @@ class Translator:
 
                 # Prevođenje
                 try:
-                    prijevod = self.prevedi_segment(segment)
+                    prijevod = self._prevedi_s_fallbackom(segment, granularnost)
                     prevedeni.append(prijevod)
                 except (KeyboardInterrupt, InterruptedError) as e:
                     logging.warning(f"Prevođenje prekinuto od strane korisnika: {e}")
@@ -658,6 +658,33 @@ class Translator:
         except Exception as e:
             logging.error(f"Greška pri spremanju chunka {idx + 1}: {e}")
 
+    def _prevedi_s_fallbackom(self, segment: str, granularnost: str) -> str:
+        """Prevodi segment uz sigurnosnu mrežu — nikada ne gubi odlomke.
+
+        Za granularnost `max_chars` segment može sadržavati više odlomaka.
+        Mali lokalni modeli katkad vrate prazan rezultat ili preskoče ostatak
+        velikog bloka (prevedu samo prvi odlomak). Ako se to dogodi, segment se
+        ponovno prevodi odlomak po odlomak kako bi kompletan sadržaj ostao
+        sačuvan. U najgorem slučaju vraća se originalni tekst umjesto praznine.
+        """
+        prijevod = self.prevedi_segment(segment)
+        if not prijevod or not prijevod.strip():
+            prijevod = None
+
+        odlomci = [p.strip() for p in segment.split('\n\n') if p.strip()]
+
+        if granularnost == "max_chars" and len(odlomci) > 1:
+            # Provjera cjelovitosti: izlaz ne smije imati manje odlomaka od ulaza
+            # (znak da je model preskočio dio sadržaja).
+            broj_izlaznih = len([p for p in (prijevod or '').split('\n\n') if p.strip()])
+            if prijevod is None or broj_izlaznih < len(odlomci):
+                dijelovi = []
+                for odlomak in odlomci:
+                    dio = self.prevedi_segment(odlomak)
+                    dijelovi.append(dio if dio and dio.strip() else odlomak)
+                return '\n\n'.join(dijelovi)
+
+        return prijevod if prijevod is not None else segment
     def prevedi_test(self, tekst: str, granularnost: str = "paragraph",
                      max_chars: int = 5000, kolicina: int = 1,
                      header: bool = True) -> str:
@@ -683,7 +710,7 @@ class Translator:
         akumulirane_rijeci = 0
         prevedeni = []
         for i, seg in enumerate(segmenti):
-            prijevod = self.prevedi_segment(seg)
+            prijevod = self._prevedi_s_fallbackom(seg, granularnost)
             prevedeni.append(prijevod)
             akumulirane_rijeci += len(seg.split())
             dodatno = ""
