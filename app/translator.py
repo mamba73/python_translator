@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -486,7 +487,8 @@ class Translator:
     def prevedi_knjigu(self, tekst: str, output_path: str, book_id: str,
                       granularnost: str = "paragraph",
                       max_chars: int = 5000,
-                      resume_from: int = 0) -> tuple[str, bool]:
+                      resume_from: int = 0,
+                      cancel_event: threading.Event | None = None) -> tuple[str, bool]:
         """Produkcijski prijevod cijele knjige s checkpointingom i detaljnim progressom.
 
         Progress bar prikazuje broj riječi (akumulirano/ukupno + %) kao u
@@ -565,6 +567,15 @@ class Translator:
                     continue
 
                 rijeci_u_segmentu = len(segment.split())
+
+                # Detekcija zahtjeva za prekid — Web GUI (Zatvori/Obustavi) ili X tipka
+                if cancel_event is not None and cancel_event.is_set():
+                    logging.warning(
+                        f"[PRIJEVOD] Zaustavljeno od strane korisnika pri segmentu "
+                        f"{idx + 1}/{ukupno}. Napredak spremljen."
+                    )
+                    je_prekinuto = True
+                    break
 
                 # Detekcija prekida
                 if detektiraj_x_tipku():
@@ -687,7 +698,8 @@ class Translator:
         return prijevod if prijevod is not None else segment
     def prevedi_test(self, tekst: str, granularnost: str = "paragraph",
                      max_chars: int = 5000, kolicina: int = 1,
-                     header: bool = True) -> str:
+                     header: bool = True,
+                     cancel_event: threading.Event | None = None) -> str:
         """Testni prijevod s opcionalnim headerom.
 
         Vraća prevedeni tekst (s opcionalnim headerom) — pozivatelj
@@ -710,6 +722,9 @@ class Translator:
         akumulirane_rijeci = 0
         prevedeni = []
         for i, seg in enumerate(segmenti):
+            if cancel_event is not None and cancel_event.is_set():
+                logging.info("[TEST PRIJEVOD] Prevod prekinut od strane korisnika (modal zatvoren).")
+                break
             prijevod = self._prevedi_s_fallbackom(seg, granularnost)
             prevedeni.append(prijevod)
             akumulirane_rijeci += len(seg.split())

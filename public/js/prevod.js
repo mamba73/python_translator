@@ -261,7 +261,22 @@
     connectModalWS();
   }
 
+  let activeTranslationBook = null;
+
+  function requestCancelTranslation() {
+    // Pošalji zahtjev serveru da čisto zaustavi aktivni prijevod (oslobađa model)
+    if (!activeTranslationBook) return;
+    const bookName = activeTranslationBook.split('/')[0];
+    fetch('/api/translation/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ book_name: bookName })
+    }).catch(() => {});
+  }
+
   function closeModal() {
+    // Ako je prijevod još uvijek u tijeku, prvo ga zaustavi
+    requestCancelTranslation();
     const modal = document.getElementById('translation-modal');
     if (modal) {
       modal.classList.add('hidden');
@@ -497,6 +512,7 @@
     if (btn) { btn.disabled = true; btn.textContent = 'Prijevod u tijeku...'; }
 
     // Otvori modal s progress barom
+    activeTranslationBook = relPath;
     openModal(mode);
 
     try {
@@ -538,6 +554,7 @@
       document.getElementById('modal-status').textContent = 'Greška: ' + e.message;
       showToast('Greška: ' + e.message, 'error');
     } finally {
+      activeTranslationBook = null;
       if (btn) {
         btn.disabled = false;
         btn.textContent = mode === 'test' ? '🧪 Pokreni TEST' : '🚀 Produkcijski prijevod';

@@ -21,6 +21,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from app.logger import FlushFileHandler, setup_logging, get_session_log_dir
+import threading
+
+# Registar trenutno aktivnih zahtjeva prekida prevođenja (po book_id)
+# Svaki aktivni prijevod dohvaća vlastiti threading.Event; Web UI preko
+# /api/translation/cancel postavlja event da bi se prijevod čisto zaustavio.
+_ACTIVE_CANCEL_EVENTS: dict[str, threading.Event] = {}
+_CANCEL_REGISTRY_LOCK = threading.Lock()
 
 # Učitaj .env odmah pri importu — prije bilo kakvih config poziva
 try:
@@ -883,15 +890,25 @@ async def api_translate(req: TranslateRequest):
         translator.postavi_knjigu(str(book_dir), book_cfg)
         logging.info(f"[PRIJEVOD] Počinje {req.mode}: {file_path.name}")
 
+        # Registar zahtjev prekida za ovu knjigu — Web UI (Zatvori/Obustavi) 
+        # postavlja event preko /api/translation/cancel da bi se prijevod zaustavio.
+        cancel_event = threading.Event()
+        cancel_key = f"{book_dir.name}::{book_cfg.get('author', 'Unknown')}"
+        with _CANCEL_REGISTRY_LOCK:
+            _ACTIVE_CANCEL_EVENTS[cancel_key] = cancel_event
+
         # Pokreni prijevod u zasebnoj dretvi — event loop ostaje slobodan
         # za WebSocket streaming progress linija u real-time.
-        if req.mode == "test":
-            def _run_test():
-                translation = translator.prevedi_test(
-                    text, granularnost=req.granularity,
-                    max_chars=req.max_chars,
-                    kolicina=req.count, header=req.header
-                )
+        try:
+            if req.mode == "test":
+                def _run_test():
+                    return translator.prevedi_test(
+                        text, granularnost=req.granularity,
+                        max_chars=req.max_chars,
+                        kolicina=req.count, header=req.header,
+                        cancel_event=cancel_event
+                    )
+
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 name = f"{file_path.stem}_test_{timestamp}.txt"
                 translated_book_dir = fm.ensure_dir(
@@ -902,6 +919,8 @@ async def api_translate(req: TranslateRequest):
                     suffix_if_exists=False
                 )
                 output_path = fm.ensure_file_path(translated_book_dir / name, suffix_if_exists=True)
+
+                translation = await asyncio.to_thread(_run_test)
                 with open(output_path, 'w', encoding='utf-8') as f:
                     f.write(translation)
                 try:
@@ -914,90 +933,112 @@ async def api_translate(req: TranslateRequest):
                     "filename": output_path.name
                 }
 
-            result = await asyncio.to_thread(_run_test)
-            return JSONResponse({
-                "status": "ok",
-                "output": result["rel_path"],
-                "output_dir": result["output_dir"],
-                "filename": result["filename"],
-                "mode": "test"
-            })
-        else:
-            def _run_production():
-                book_id = f"{book_dir.name}_web"
-                translated_book_dir = fm.ensure_dir(
-                    fm.book_output_dir(
-                        book_dir.name,
-                        book_cfg.get("author", "Unknown")
-                    ),
-                    suffix_if_exists=False
-                )
-
-                resume_from = 0
-                if req.resume:
-                    # Nastavi od checkpointa — koristi postojeću izlaznu datoteku
-                    checkpoint = None
-                    for checkpoint_data in cp.ucitaj_checkpointe():
-                        if checkpoint_data.get("book_id") == book_id:
-                            checkpoint = checkpoint_data
-                            break
-                    if checkpoint is None:
-                        raise RuntimeError(
-                            "Nema spremljenog checkpointa za ovu knjigu. "
-                            "Pokrenite novi prijevod."
-                        )
-                    output_path = Path(checkpoint.get("output_path", ""))
-                    if not output_path.exists():
-                        raise RuntimeError(
-                            f"Izlazna datoteka checkpointa ne postoji: {output_path}"
-                        )
-                    resume_from = checkpoint.get("current_segment", 0)
-                    logging.info(
-                        f"[PRIJEVOD] Nastavljam od segmenta {resume_from} "
-                        f"({checkpoint.get('progress_percent', 0)}%)"
+            else:
+                def _run_production():
+                    book_id = f"{book_dir.name}_web"
+                    translated_book_dir = fm.ensure_dir(
+                        fm.book_output_dir(
+                            book_dir.name,
+                            book_cfg.get("author", "Unknown")
+                        ),
+                        suffix_if_exists=False
                     )
-                else:
-                    # Novi prijevod — kreiraj novu izlaznu datoteku i obriši stari checkpoint
-                    output_path = fm.ensure_file_path(
-                        translated_book_dir / f"{book_dir.name}.txt",
-                        suffix_if_exists=True
+
+                    resume_from = 0
+                    if req.resume:
+                        # Nastavi od checkpointa — koristi postojeću izlaznu datoteku
+                        checkpoint = None
+                        for checkpoint_data in cp.ucitaj_checkpointe():
+                            if checkpoint_data.get("book_id") == book_id:
+                                checkpoint = checkpoint_data
+                                break
+                        if checkpoint is None:
+                            raise RuntimeError(
+                                "Nema spremljenog checkpointa za ovu knjigu. "
+                                "Pokrenite novi prijevod."
+                            )
+                        output_path = Path(checkpoint.get("output_path", ""))
+                        if not output_path.exists():
+                            raise RuntimeError(
+                                f"Izlazna datoteka checkpointa ne postoji: {output_path}"
+                            )
+                        resume_from = checkpoint.get("current_segment", 0)
+                        logging.info(
+                            f"[PRIJEVOD] Nastavljam od segmenta {resume_from} "
+                            f"({checkpoint.get('progress_percent', 0)}%)"
+                        )
+                    else:
+                        # Novi prijevod — kreiraj novu izlaznu datoteku i obriši stari checkpoint
+                        output_path = fm.ensure_file_path(
+                            translated_book_dir / f"{book_dir.name}.txt",
+                            suffix_if_exists=True
+                        )
+                        cp.obrisi_checkpoint(book_id)
+
+                    translation, is_interrupted = translator.prevedi_knjigu(
+                        text, output_path=str(output_path),
+                        book_id=book_id,
+                        max_chars=req.max_chars,
+                        granularnost=req.granularity,
+                        resume_from=resume_from,
+                        cancel_event=cancel_event
                     )
-                    cp.obrisi_checkpoint(book_id)
+                    try:
+                        copy_metadata_to_target(file_path, output_path, INPUT_DIR, OUTPUT_DIR, TRANSLATED_DIR)
+                    except Exception as meta_err:
+                        logging.warning(f"[METADATA] Greška pri kopiranju metapodataka tijekom prijevoda (produkcija): {meta_err}")
+                    status = "interrupted" if is_interrupted else "ok"
+                    logging.info(f"[PRIJEVOD] Završen produkcijski: {output_path.name} (status={status})")
+                    return {
+                        "rel_path": str(output_path.relative_to(TRANSLATED_DIR)).replace("\\", "/"),
+                        "output_dir": str(output_path.parent.relative_to(TRANSLATED_DIR)).replace("\\", "/"),
+                        "filename": output_path.name,
+                        "status": status
+                    }
 
-                translation, is_interrupted = translator.prevedi_knjigu(
-                    text, output_path=str(output_path),
-                    book_id=book_id,
-                    max_chars=req.max_chars,
-                    granularnost=req.granularity,
-                    resume_from=resume_from
-                )
-                try:
-                    copy_metadata_to_target(file_path, output_path, INPUT_DIR, OUTPUT_DIR, TRANSLATED_DIR)
-                except Exception as meta_err:
-                    logging.warning(f"[METADATA] Greška pri kopiranju metapodataka tijekom prijevoda (produkcija): {meta_err}")
-                status = "interrupted" if is_interrupted else "ok"
-                logging.info(f"[PRIJEVOD] Završen produkcijski: {output_path.name} (status={status})")
-                return {
-                    "rel_path": str(output_path.relative_to(TRANSLATED_DIR)).replace("\\", "/"),
-                    "output_dir": str(output_path.parent.relative_to(TRANSLATED_DIR)).replace("\\", "/"),
-                    "filename": output_path.name,
-                    "status": status
-                }
-
-            result = await asyncio.to_thread(_run_production)
-            return JSONResponse({
-                "status": result["status"],
-                "output": result["rel_path"],
-                "output_dir": result["output_dir"],
-                "filename": result["filename"],
-                "mode": "production"
-            })
+                result = await asyncio.to_thread(_run_production)
+                return JSONResponse({
+                    "status": result["status"],
+                    "output": result["rel_path"],
+                    "output_dir": result["output_dir"],
+                    "filename": result["filename"],
+                    "mode": "production"
+                })
+        finally:
+            # Ukloni cancel event iz registra nakon završetka (ili prekida) prijevoda
+            with _CANCEL_REGISTRY_LOCK:
+                _ACTIVE_CANCEL_EVENTS.pop(cancel_key, None)
 
     except HTTPException:
         raise
     except Exception as e:
         logging.error(f"[PRIJEVOD] Greška: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+class TranslationCancelRequest(BaseModel):
+    book_name: str
+
+
+@app.post("/api/translation/cancel")
+async def api_translation_cancel(req: TranslationCancelRequest):
+    """Postavlja cancel event za aktivni prijevod zadane knjige.
+
+    Web UI (tipka 'Zatvori' u modalu) poziva ovu rutu kako bi se prijevod
+    čisto zaustavio nakon trenutnog segmenta i oslobodio model.
+    """
+    cancelled = []
+    with _CANCEL_REGISTRY_LOCK:
+        for key, event in _ACTIVE_CANCEL_EVENTS.items():
+            if req.book_name in key:
+                event.set()
+                cancelled.append(key)
+    if cancelled:
+        logging.warning(f"[PRIJEVOD] Zahtjev za prekid poslan za: {cancelled}")
+        return {"status": "ok", "cancelled": cancelled}
+    logging.info(f"[PRIJEVOD] Nema aktivnog prijevoda za prekid: {req.book_name}")
+    return {"status": "no_active_translation", "cancelled": []}
 
 
 class TranslatedContentRequest(BaseModel):
