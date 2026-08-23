@@ -133,7 +133,16 @@
           class="w-full bg-gray-900 border border-gray-600 text-gray-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 appearance-none cursor-pointer">
           <option value="paragraph">Odlomak (Paragraph)</option>
           <option value="sentence">Rečenica (Sentence)</option>
+          <option value="max_chars">Po maks. broju znakova (odlomci)</option>
         </select>
+      </div>
+
+      <!-- Unos: maks. broj znakova po segmentu — prikazuje se samo za "max_chars" -->
+      <div id="max-chars-container" class="hidden">
+        <label class="block text-sm text-gray-300 mb-1.5">Maks. znakova po segmentu</label>
+        <input id="max-chars-input" type="number" min="100" step="100" value="5000"
+          class="w-full bg-gray-900 border border-gray-600 text-gray-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500">
+        <p class="text-xs text-gray-500 mt-1">Grupira kompletne odlomke dok se ne dosegne ovaj broj znakova — smanjuje potrošnja tokena.</p>
       </div>
 
       <!-- Dropdown: Profil knjige -->

@@ -415,8 +415,77 @@ class Translator:
 
         return response
 
+    def _je_grupiranje_odlomcima(self, granularnost: str) -> bool:
+        """Vraća True za granularnosti koje održavaju odlomke (separator '\n\n')."""
+        return granularnost in ("paragraph", "max_chars")
+
+    def _grupiraj_po_znakovima(self, tekst: str, max_chars: int) -> list[str]:
+        """Grupira KOMPLETNE odlomke u segmente do max_chars znakova.
+
+        Odlomak koji sam premašuje max_chars ostaje kao vlastiti segment —
+        odlomak se nikad ne cijepa kako bismo uvijek proslijedili puni tekst.
+        Time se mnogi kratki odlomci (naslovi, pojedinačne rečenice...) šalju
+        u jednom zahtjevu i smanjuje potrošnja tokena.
+        """
+        max_chars = max(1, int(max_chars))
+        odlomci = [p.strip() for p in tekst.split('\n\n') if p.strip()]
+        if not odlomci:
+            return []
+
+        segmenti: list[str] = []
+        trenutni: list[str] = []
+        duljina = 0
+        for odlomak in odlomci:
+            duljina_odlomka = len(odlomak)
+            # Ako dodavanje sljedećeg odlomka premaši max_chars, zatvori segment
+            if trenutni and duljina + duljina_odlomka + 2 > max_chars:
+                segmenti.append('\n\n'.join(trenutni))
+                trenutni = []
+                duljina = 0
+            trenutni.append(odlomak)
+            duljina += duljina_odlomka + 2  # +2 za '\n\n' separator
+
+        if trenutni:
+            segmenti.append('\n\n'.join(trenutni))
+        return segmenti
+
+    def _segmentiraj(self, tekst: str, granularnost: str,
+                     max_chars: int = 5000,
+                     kolicina: int | None = None) -> list[str]:
+        """Razbija tekst u segmente prema odabranoj granularnosti.
+
+        granularnost:
+          - "paragraph" — svaki odlomak je zaseban segment;
+          - "sentence"  — svaka rečenica je zaseban segment;
+          - "max_chars" — grupira kompletne odlomke do max_chars znakova;
+          - ostalo      — cijeli tekst je jedan segment.
+
+        Args:
+            tekst: Izvorni tekst za segmentaciju.
+            granularnost: Granularnost segmentacije.
+            max_chars: Maksimalni broj znakova po segmentu (za "max_chars").
+            kolicina: Maksimalni broj segmenata (opcionalno, za test).
+
+        Returns:
+            Lista očišćenih segmenata.
+        """
+        if granularnost == "paragraph":
+            segmenti = tekst.split('\n\n')
+        elif granularnost == "sentence":
+            segmenti = re.split(r'(?<=[.!?])\s+', tekst)
+        elif granularnost == "max_chars":
+            segmenti = self._grupiraj_po_znakovima(tekst, max_chars)
+        else:
+            segmenti = [tekst]
+
+        segmenti = [s.strip() for s in segmenti if s.strip()]
+        if kolicina is not None:
+            segmenti = segmenti[:kolicina]
+        return segmenti
+
     def prevedi_knjigu(self, tekst: str, output_path: str, book_id: str,
                       granularnost: str = "paragraph",
+                      max_chars: int = 5000,
                       resume_from: int = 0) -> tuple[str, bool]:
         """Produkcijski prijevod cijele knjige s checkpointingom i detaljnim progressom.
 
@@ -445,15 +514,7 @@ class Translator:
             (prevedeni_tekst, je_prekinuto)
         """
         # Segmentacija
-        if granularnost == "paragraph":
-            segmenti = tekst.split('\n\n')
-        elif granularnost == "sentence":
-            segmenti = re.split(r'(?<=[.!?])\s+', tekst)
-        else:
-            segmenti = [tekst]  # Odlomak - cijeli tekst
-
-        # Očisti prazne segmente
-        segmenti = [s.strip() for s in segmenti if s.strip()]
+        segmenti = self._segmentiraj(tekst, granularnost, max_chars)
 
         if not segmenti:
             return "", False
@@ -469,7 +530,8 @@ class Translator:
             try:
                 with open(output_path, 'r', encoding='utf-8') as f:
                     postojeci_tekst = f.read()
-                postojeci_segmenti = postojeci_tekst.split('\n\n') if granularnost == "paragraph" else postojeci_tekst.split(' ')
+                separator = '\n\n' if self._je_grupiranje_odlomcima(granularnost) else ' '
+                postojeci_segmenti = postojeci_tekst.split(separator)
                 postojeci_segmenti = [s.strip() for s in postojeci_segmenti if s.strip()]
                 resume_from = len(postojeci_segmenti)
                 prevedeni = postojeci_segmenti
@@ -486,7 +548,8 @@ class Translator:
             try:
                 with open(output_path, 'r', encoding='utf-8') as f:
                     postojeci_tekst = f.read()
-                postojeci_segmenti = postojeci_tekst.split('\n\n') if granularnost == "paragraph" else postojeci_tekst.split(' ')
+                separator = '\n\n' if self._je_grupiranje_odlomcima(granularnost) else ' '
+                postojeci_segmenti = postojeci_tekst.split(separator)
                 postojeci_segmenti = [s.strip() for s in postojeci_segmenti if s.strip()]
                 prevedeni = postojeci_segmenti[:resume_from]
                 akumulirane_rijeci = sum(len(s.split()) for s in prevedeni)
@@ -563,7 +626,7 @@ class Translator:
             je_prekinuto = True
 
         # Spremanje
-        final_tekst = '\n\n'.join(prevedeni) if granularnost == "paragraph" else ' '.join(prevedeni)
+        final_tekst = '\n\n'.join(prevedeni) if self._je_grupiranje_odlomcima(granularnost) else ' '.join(prevedeni)
 
         if not je_prekinuto:
             self._cp.obrisi_checkpoint(book_id)
@@ -584,7 +647,7 @@ class Translator:
             idx: Indeks trenutnog chunka.
             resume_from: Indeks od kojeg se nastavlja (za logiranje).
         """
-        separator = '\n\n' if granularnost == "paragraph" else ' '
+        separator = '\n\n' if self._je_grupiranje_odlomcima(granularnost) else ' '
         try:
             with open(output_path, 'a', encoding='utf-8') as f:
                 # Dodaj separator prije prvog chunka samo ako datoteka već ima sadržaj
@@ -596,7 +659,8 @@ class Translator:
             logging.error(f"Greška pri spremanju chunka {idx + 1}: {e}")
 
     def prevedi_test(self, tekst: str, granularnost: str = "paragraph",
-                     kolicina: int = 1, header: bool = True) -> str:
+                     max_chars: int = 5000, kolicina: int = 1,
+                     header: bool = True) -> str:
         """Testni prijevod s opcionalnim headerom.
 
         Vraća prevedeni tekst (s opcionalnim headerom) — pozivatelj
@@ -612,14 +676,7 @@ class Translator:
             Prevedeni tekst (s headerom ako je uključen).
         """
         # Segmentacija
-        if granularnost == "paragraph":
-            segmenti = tekst.split('\n\n')
-        elif granularnost == "sentence":
-            segmenti = re.split(r'(?<=[.!?])\s+', tekst)
-        else:
-            segmenti = [tekst]
-
-        segmenti = [s.strip() for s in segmenti if s.strip()][:kolicina]
+        segmenti = self._segmentiraj(tekst, granularnost, max_chars, kolicina)
 
         # Test prijevod s progress barom (broj riječi)
         ukupno_rijeci = sum(len(s.split()) for s in segmenti)

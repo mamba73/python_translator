@@ -143,6 +143,9 @@
       }
       if (toggle) toggle.checked = data.header !== false;
       if (granSelect) granSelect.value = data.granularity || 'paragraph';
+      const maxCharsInput = document.getElementById('max-chars-input');
+      if (maxCharsInput) maxCharsInput.value = data.max_chars || 5000;
+      toggleMaxCharsField();
       if (profileSelect && data.profile) profileSelect.value = data.profile;
     } catch (err) {
       // Ignoriraj
@@ -156,12 +159,14 @@
       const toggle = document.getElementById('header-toggle');
       const granSelect = document.getElementById('granularity-select');
       const profileSelect = document.getElementById('profile-select');
+      const maxCharsInput = document.getElementById('max-chars-input');
 
       const payload = {
         count: slider ? parseInt(slider.value) : undefined,
         header: toggle ? toggle.checked : undefined,
         granularity: granSelect ? granSelect.value : undefined,
-        profile: profileSelect ? profileSelect.value : undefined
+        profile: profileSelect ? profileSelect.value : undefined,
+        max_chars: maxCharsInput ? parseInt(maxCharsInput.value) : undefined
       };
 
       try {
@@ -175,6 +180,16 @@
         showToast('Greška pri spremanju opcija.', 'error');
       }
     }, 600);
+  }
+
+  function toggleMaxCharsField() {
+    const container = document.getElementById('max-chars-container');
+    const input = document.getElementById('max-chars-input');
+    const granSelect = document.getElementById('granularity-select');
+    if (!container || !granSelect) return;
+    const isMaxChars = granSelect.value === 'max_chars';
+    container.classList.toggle('hidden', !isMaxChars);
+    if (input && isMaxChars && !input.value) input.value = 5000;
   }
 
   document.addEventListener('DOMContentLoaded', async () => {
@@ -200,8 +215,14 @@
     document.getElementById('header-toggle')?.addEventListener('change', saveOptions);
 
     // Dropdowni
-    document.getElementById('granularity-select')?.addEventListener('change', saveOptions);
+    document.getElementById('granularity-select')?.addEventListener('change', () => {
+      toggleMaxCharsField();
+      saveOptions();
+    });
     document.getElementById('profile-select')?.addEventListener('change', saveOptions);
+
+    // Unos maks. broja znakova
+    document.getElementById('max-chars-input')?.addEventListener('input', saveOptions);
 
     // Gumb TEST
     document.getElementById('btn-test')?.addEventListener('click', () => startTranslation('test'));
@@ -458,6 +479,7 @@
     const toggle = document.getElementById('header-toggle');
     const granSelect = document.getElementById('granularity-select');
     const profileSelect = document.getElementById('profile-select');
+    const maxCharsInput = document.getElementById('max-chars-input');
 
     const payload = {
       rel_path: relPath,
@@ -465,6 +487,7 @@
       granularity: granSelect?.value || 'paragraph',
       count: slider ? parseInt(slider.value) : 1,
       header: toggle ? toggle.checked : true,
+      max_chars: maxCharsInput ? parseInt(maxCharsInput.value) : 5000,
       profile: profileSelect?.value || 'sf_literature',
       resume: resume
     };

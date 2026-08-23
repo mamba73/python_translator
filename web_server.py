@@ -757,6 +757,7 @@ async def api_options():
             "granularity": t.get("granularity", "paragraph"),
             "count": t.get("default_count", 1),
             "header": t.get("test_header", True),
+            "max_chars": t.get("max_chars_per_segment", 5000),
             "profile": "sf_literature"
         })
     except Exception as e:
@@ -768,6 +769,7 @@ class OptionsSaveRequest(BaseModel):
     count: int | None = None
     header: bool | None = None
     profile: str | None = None
+    max_chars: int | None = None
 
 
 @app.post("/api/options")
@@ -783,8 +785,10 @@ async def api_options_save(req: OptionsSaveRequest):
             t["default_count"] = req.count
         if req.header is not None:
             t["test_header"] = req.header
+        if req.max_chars is not None:
+            t["max_chars_per_segment"] = req.max_chars
         save_settings(config)
-        logging.info(f"[OPCIJE] Ažurirane: granularity={req.granularity}, count={req.count}, header={req.header}")
+        logging.info(f"[OPCIJE] Ažurirane: granularity={req.granularity}, count={req.count}, header={req.header}, max_chars={req.max_chars}")
         return JSONResponse({"status": "ok"})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -798,6 +802,7 @@ class TranslateRequest(BaseModel):
     header: bool = True
     profile: str = "sf_literature"
     resume: bool = False  # True = nastavi od checkpointa
+    max_chars: int = 5000
 
 
 @app.post("/api/translate")
@@ -884,6 +889,7 @@ async def api_translate(req: TranslateRequest):
             def _run_test():
                 translation = translator.prevedi_test(
                     text, granularnost=req.granularity,
+                    max_chars=req.max_chars,
                     kolicina=req.count, header=req.header
                 )
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -961,6 +967,7 @@ async def api_translate(req: TranslateRequest):
                 translation, is_interrupted = translator.prevedi_knjigu(
                     text, output_path=str(output_path),
                     book_id=book_id,
+                    max_chars=req.max_chars,
                     granularnost=req.granularity,
                     resume_from=resume_from
                 )
