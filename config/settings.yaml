@@ -43,9 +43,9 @@ translation:
   scan_pages_limit: 30
   header_footer_threshold: 0.4
   test_header: true
-  granularity: paragraph
-  default_count: 6
-  max_chars_per_segment: 5000
+  granularity: max_chars
+  default_count: 2
+  max_chars_per_segment: 1000
   thinking_config:
     include_thinking_config: true
     thinking_level: 0
